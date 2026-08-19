@@ -114,24 +114,32 @@ jobs:
         env:
           CGO_ENABLED: "0"
 
-  # The musl builds have no runner of their own; exercise them in a container.
+  # The musl builds have no runner of their own, so exercise them under
+  # Alpine via docker rather than as a job container: JavaScript actions --
+  # checkout and download-artifact among them -- cannot run inside an Alpine
+  # container on arm64.
+  # https://github.com/orgs/community/discussions/53407
   smoke-musl:
     needs: cross
     strategy:
       fail-fast: false
       matrix:
-        platform: [linux_amd64_musl, linux_arm64_musl]
-    runs-on: ${{ matrix.platform == 'linux_arm64_musl' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
-    container: golang:alpine
+        include:
+          - platform: linux_amd64_musl
+            os: ubuntu-latest
+          - platform: linux_arm64_musl
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: lib-${{ matrix.platform }}
           path: libs/${{ matrix.platform }}/lib/
-      - run: go test -tags musl -count=1 ./...
-        env:
-          CGO_ENABLED: "0"
+      - name: Go test under musl
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src -e CGO_ENABLED=0 \
+            golang:alpine go test -tags musl -count=1 ./...
 
   commit:
     needs: [smoke, smoke-musl]
