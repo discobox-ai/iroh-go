@@ -1,0 +1,4 @@
+The prebuilt iroh cdylib for this platform is committed here as `iroh_go.lib`
+by the build-libs CI workflow. This placeholder keeps the go:embed directive
+satisfiable so the package still compiles in a checkout that has not built
+the libraries yet; the loader reports a clear error at runtime instead.

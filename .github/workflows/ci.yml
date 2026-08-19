@@ -1,0 +1,72 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The library the Go tests load is a build artifact, so build it once and
+  # share it rather than rebuilding it in each job.
+  lib:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - run: ./scripts/build-lib.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lib-linux_amd64
+          path: libs/linux_amd64/lib/
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - run: cd rust && cargo fmt --check
+      - run: cd rust && cargo clippy --all-targets -- -D warnings
+      - run: cd rust && cargo test
+
+  go:
+    needs: lib
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - uses: actions/download-artifact@v4
+        with:
+          name: lib-linux_amd64
+          path: libs/linux_amd64/lib/
+      - run: go vet ./...
+      - name: gofmt
+        run: |
+          out=$(gofmt -l . | grep -v '^rust/' || true)
+          if [ -n "$out" ]; then echo "gofmt needed:"; echo "$out"; exit 1; fi
+      # The suite runs the way users build: no C toolchain involved.
+      - run: CGO_ENABLED=0 go test -count=1 ./...
+      - run: go test -race -count=1 ./...
+
+  # The point of the whole exercise: every target still builds with no C
+  # compiler and no cgo.
+  cross:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - run: make cross

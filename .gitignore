@@ -1,0 +1,16 @@
+/rust/target/
+
+# Core dumps, e.g. from a crash under `go test -race`.
+core
+core.*
+
+# Locally built native libraries.
+#
+# These ARE shipped -- they have to be in the tree, because a Go module zip is
+# built from the repo at a tag. But only the build-libs workflow should commit
+# them, after its smoke jobs have run the Go suite against each one on real
+# hardware. Ignoring them here stops a local `make lib` build, which has been
+# verified on one platform at most, from being committed by accident. The
+# workflow force-adds them; see docs/RELEASING.md.
+libs/*/lib/iroh_go.lib
+libs/*/lib/iroh_go.lib.sha256

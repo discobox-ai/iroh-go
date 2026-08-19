@@ -1,0 +1,20 @@
+[package]
+name = "irohgo-ffi"
+description = "Flat C ABI over iroh, designed for CGO-free Go bindings via purego"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "iroh_go"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+iroh = "1.0.3"
+iroh-base = "1.0"
+iroh-tickets = "1.0"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+bytes = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

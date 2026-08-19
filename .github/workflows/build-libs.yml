@@ -1,0 +1,163 @@
+name: build-libs
+
+# Builds the iroh cdylib for every supported platform, verifies it, and
+# commits the results into the per-platform modules under libs/.
+#
+# Deliberately manual. These artifacts have to live in git, because a Go
+# module zip is built from the repo at a tag -- whatever is committed when
+# `libs/darwin_arm64/v0.1.0` is tagged is exactly what users download. But
+# each run rewrites eight ~14MB binaries, and binaries do not delta-compress,
+# so running this on every push would add ~115MB of permanent history per
+# change. Run it when cutting a release; see docs/RELEASING.md.
+#
+# Correctness on every push is covered by ci.yml, which builds a fresh
+# library from your Rust changes and runs the full Go suite against it.
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Six of the eight platforms cross-compile from Linux. Windows included:
+  # cargo-xwin targets the MSVC ABI without a Windows machine.
+  cross:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux_amd64
+          - linux_arm64
+          - linux_amd64_musl
+          - linux_arm64_musl
+          - windows_amd64
+          - windows_arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mlugg/setup-zig@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: ${{ matrix.platform }}
+      - run: cargo install --locked cargo-zigbuild cargo-xwin
+      - run: ./scripts/build-libs.sh ${{ matrix.platform }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lib-${{ matrix.platform }}
+          path: libs/${{ matrix.platform }}/lib/iroh_go.lib*
+
+  # macOS cannot be cross-compiled: iroh links the SystemConfiguration and
+  # CoreFoundation frameworks, which ship only in Apple's SDK, and Apple
+  # licenses that SDK for use on Apple hardware. An arm64 runner builds both
+  # architectures, since the SDK covers them.
+  darwin:
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [darwin_amd64, darwin_arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: ${{ matrix.platform }}
+      - run: ./scripts/build-libs.sh ${{ matrix.platform }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lib-${{ matrix.platform }}
+          path: libs/${{ matrix.platform }}/lib/iroh_go.lib*
+
+  # Cross-compiling proves a library links, not that it works. These libraries
+  # are dlopen'd at runtime with no fallback, so a broken one fails in the
+  # user's process rather than at their compile time. Run the real suite on
+  # real hardware before anything is committed.
+  smoke:
+    needs: [cross, darwin]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux_amd64
+          - os: ubuntu-24.04-arm
+            platform: linux_arm64
+          - os: macos-13
+            platform: darwin_amd64
+          - os: macos-14
+            platform: darwin_arm64
+          - os: windows-latest
+            platform: windows_amd64
+          - os: windows-11-arm
+            platform: windows_arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - uses: actions/download-artifact@v4
+        with:
+          name: lib-${{ matrix.platform }}
+          path: libs/${{ matrix.platform }}/lib/
+      - run: go test -count=1 ./...
+        env:
+          CGO_ENABLED: "0"
+
+  # The musl builds have no runner of their own; exercise them in a container.
+  smoke-musl:
+    needs: cross
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux_amd64_musl, linux_arm64_musl]
+    runs-on: ${{ matrix.platform == 'linux_arm64_musl' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    container: golang:alpine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: lib-${{ matrix.platform }}
+          path: libs/${{ matrix.platform }}/lib/
+      - run: go test -tags musl -count=1 ./...
+        env:
+          CGO_ENABLED: "0"
+
+  commit:
+    needs: [smoke, smoke-musl]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: lib-*
+          path: /tmp/libs
+      - name: Move libraries into their modules
+        run: |
+          set -e
+          for dir in /tmp/libs/lib-*; do
+            platform="${dir#/tmp/libs/lib-}"
+            mkdir -p "libs/$platform/lib"
+            cp "$dir"/iroh_go.lib "$dir"/iroh_go.lib.sha256 "libs/$platform/lib/"
+          done
+          git diff --stat
+      - name: Commit
+        run: |
+          if git diff --quiet; then
+            echo "libraries unchanged"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Force-added: libs/*/lib/iroh_go.lib is gitignored so that a local
+          # build cannot be committed by hand. Reaching here means every
+          # library passed its smoke job.
+          git add -f libs
+          git commit -m "libs: rebuild native libraries from ${GITHUB_SHA::8}"
+          git push
