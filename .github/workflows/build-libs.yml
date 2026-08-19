@@ -37,12 +37,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: mlugg/setup-zig@v1
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
           key: ${{ matrix.platform }}
-      - run: cargo install --locked cargo-zigbuild cargo-xwin
+      # Linux targets go through zig; Windows targets go through cargo-xwin,
+      # which needs neither zig nor a Windows machine.
+      - if: startsWith(matrix.platform, 'linux')
+        uses: mlugg/setup-zig@v2
+      - if: startsWith(matrix.platform, 'linux')
+        run: cargo install --locked cargo-zigbuild
+      - if: startsWith(matrix.platform, 'windows')
+        run: cargo install --locked cargo-xwin
       - run: ./scripts/build-libs.sh ${{ matrix.platform }}
       - uses: actions/upload-artifact@v4
         with:
