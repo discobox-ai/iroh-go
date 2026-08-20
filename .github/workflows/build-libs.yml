@@ -191,15 +191,19 @@ jobs:
           git diff --stat
       - name: Commit
         run: |
-          if git diff --quiet; then
-            echo "libraries unchanged"
-            exit 0
-          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # Force-added: libs/*/lib/iroh_go.lib is gitignored so that a local
           # build cannot be committed by hand. Reaching here means every
           # library passed its smoke job.
           git add -f libs
+          # Stage first, then ask the index what changed. `git diff` on the
+          # worktree sees only tracked files, so while the libraries are
+          # untracked it reports nothing and this step would skip the commit
+          # while reporting success.
+          if git diff --cached --quiet; then
+            echo "libraries unchanged"
+            exit 0
+          fi
           git commit -m "libs: rebuild native libraries from ${GITHUB_SHA::8}"
           git push
