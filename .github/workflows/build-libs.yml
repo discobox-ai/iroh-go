@@ -24,6 +24,7 @@ jobs:
   # also pins a glibc floor the runner's own libc could not give us.
   cross:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -53,6 +54,7 @@ jobs:
   # architectures, since the SDK covers them.
   darwin:
     runs-on: macos-14
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -84,6 +86,7 @@ jobs:
           - platform: windows_arm64
             os: windows-11-arm
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -112,7 +115,12 @@ jobs:
             platform: linux_amd64
           - os: ubuntu-24.04-arm
             platform: linux_arm64
-          - os: macos-13
+          # macos-13 was retired in December 2025; macos-15-intel is the
+          # x86_64 replacement, and the last one -- GitHub drops x86_64 macOS
+          # in August 2027, after which this leg needs Rosetta on an arm64
+          # runner. An unavailable label queues forever rather than failing,
+          # so a stuck smoke job is the first thing to check here.
+          - os: macos-15-intel
             platform: darwin_amd64
           - os: macos-14
             platform: darwin_arm64
