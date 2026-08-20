@@ -19,6 +19,8 @@ io.Copy(os.Stdout, recv)
 go get github.com/discobox-ai/iroh-go
 ```
 
+Requires Go 1.26 or newer.
+
 ## Why no CGO
 
 The existing [iroh-go](https://git.coopcloud.tech/decentral1se/iroh-go) is
