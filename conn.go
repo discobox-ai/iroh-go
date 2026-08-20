@@ -13,22 +13,28 @@ import (
 // A connection carries any number of independent streams plus unreliable
 // datagrams. It is safe for concurrent use.
 type Conn struct {
-	h     handle
-	local EndpointID
+	h handle
+	// endpoint is held so that Go cannot collect it while this connection is
+	// still in use. Freeing an endpoint drops its driver, and every
+	// connection on it dies with it -- reported, from the far side of the
+	// FFI, as "endpoint driver future was dropped" in the middle of a working
+	// exchange. A caller with a connection holds no endpoint, and a caller
+	// with a stream holds neither, so the chain has to hold itself together.
+	endpoint *Endpoint
 
 	mu     sync.Mutex
 	remote EndpointID
 }
 
-func newConn(h uint64, local EndpointID) *Conn {
-	c := &Conn{local: local}
+func newConn(h uint64, endpoint *Endpoint) *Conn {
+	c := &Conn{endpoint: endpoint}
 	c.h.set(h)
 	runtime.AddCleanup(c, ffi.ConnFree, h)
 	return c
 }
 
 // LocalID is the endpoint id this side of the connection answers as.
-func (c *Conn) LocalID() EndpointID { return c.local }
+func (c *Conn) LocalID() EndpointID { return c.endpoint.ID() }
 
 // RemoteID returns the peer's endpoint id, proven by the TLS handshake.
 //
@@ -74,7 +80,7 @@ func (c *Conn) OpenBi(ctx context.Context) (*SendStream, *RecvStream, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return newSendStream(send), newRecvStream(recv), nil
+	return newSendStream(send, c), newRecvStream(recv, c), nil
 }
 
 // AcceptBi waits for the peer to open a bidirectional stream.
@@ -87,7 +93,7 @@ func (c *Conn) AcceptBi(ctx context.Context) (*SendStream, *RecvStream, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return newSendStream(send), newRecvStream(recv), nil
+	return newSendStream(send, c), newRecvStream(recv, c), nil
 }
 
 // OpenUni opens a unidirectional stream this side can only write to.
@@ -100,7 +106,7 @@ func (c *Conn) OpenUni(ctx context.Context) (*SendStream, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newSendStream(send), nil
+	return newSendStream(send, c), nil
 }
 
 // AcceptUni waits for the peer to open a unidirectional stream.
@@ -113,7 +119,7 @@ func (c *Conn) AcceptUni(ctx context.Context) (*RecvStream, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newRecvStream(recv), nil
+	return newRecvStream(recv, c), nil
 }
 
 // SendDatagram sends an unreliable, unordered datagram.
