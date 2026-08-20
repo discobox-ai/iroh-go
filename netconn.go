@@ -143,7 +143,9 @@ func (c *StreamConn) CloseWrite() error {
 
 // Close ends the stream in both directions. It is idempotent, and safe to
 // call while a read or write is in flight: those calls return
-// [net.ErrClosed].
+// [net.ErrClosed]. That holds for every call made through this type, which
+// reads and writes under the stream's own deadlines rather than under a
+// caller's context.
 func (c *StreamConn) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.closed)
