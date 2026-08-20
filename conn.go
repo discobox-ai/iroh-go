@@ -3,6 +3,7 @@ package iroh
 import (
 	"context"
 	"runtime"
+	"sync"
 
 	"github.com/discobox-ai/iroh-go/internal/ffi"
 )
@@ -12,26 +13,43 @@ import (
 // A connection carries any number of independent streams plus unreliable
 // datagrams. It is safe for concurrent use.
 type Conn struct {
-	h handle
+	h     handle
+	local EndpointID
+
+	mu     sync.Mutex
+	remote EndpointID
 }
 
-func newConn(h uint64) *Conn {
-	c := &Conn{}
+func newConn(h uint64, local EndpointID) *Conn {
+	c := &Conn{local: local}
 	c.h.set(h)
 	runtime.AddCleanup(c, ffi.ConnFree, h)
 	return c
 }
 
+// LocalID is the endpoint id this side of the connection answers as.
+func (c *Conn) LocalID() EndpointID { return c.local }
+
 // RemoteID returns the peer's endpoint id, proven by the TLS handshake.
+//
+// A connection's peer cannot change, so the first successful lookup is
+// remembered: a caller that identifies every stream by its peer would
+// otherwise cross the FFI boundary once per stream to be told the same thing.
 func (c *Conn) RemoteID() (EndpointID, error) {
-	var id EndpointID
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.remote.IsZero() {
+		return c.remote, nil
+	}
 	h, err := c.h.get()
 	if err != nil {
-		return id, err
+		return EndpointID{}, err
 	}
+	var id EndpointID
 	if err := ffi.ConnRemoteID(h, id[:]); err != nil {
-		return id, err
+		return EndpointID{}, err
 	}
+	c.remote = id
 	return id, nil
 }
 
