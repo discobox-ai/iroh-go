@@ -143,7 +143,6 @@ pub fn shutdown() {
 
 pub struct Op {
     id: u64,
-    finished: AtomicBool,
     cancel_requested: AtomicBool,
     abort: Mutex<Option<AbortHandle>>,
     result: Mutex<Option<Result<OpValue>>>,
@@ -153,44 +152,37 @@ impl Op {
     fn new(id: u64) -> Self {
         Self {
             id,
-            finished: AtomicBool::new(false),
             cancel_requested: AtomicBool::new(false),
             abort: Mutex::new(None),
             result: Mutex::new(None),
         }
     }
 
-    /// Records the outcome and posts a completion, unless cancellation
-    /// already posted one.
-    fn complete(&self, r: Result<OpValue>) {
-        if self.finished.swap(true, Ordering::SeqCst) {
-            // Cancellation won. Whatever we produced is unreachable from Go,
-            // so release any handles it created rather than leaking them.
-            if let Ok(v) = &r {
-                v.release_handles();
-            }
-            return;
-        }
-        let status = if r.is_ok() {
-            COMPLETION_OK
-        } else {
-            COMPLETION_ERR
+    /// Records the outcome and posts this operation's single completion.
+    ///
+    /// Called exactly once, by the supervisor in [`spawn`], so there is no
+    /// race to arbitrate here.
+    fn post(&self, r: Result<OpValue>) {
+        let status = match &r {
+            Ok(_) => COMPLETION_OK,
+            Err(e) if e.kind == ErrKind::Cancelled => COMPLETION_CANCELLED,
+            Err(_) => COMPLETION_ERR,
         };
         *self.result.lock().expect("op poisoned") = Some(r);
         completions().push(self.id, status);
     }
 
-    /// Aborts the underlying task and posts a cancellation completion, unless
-    /// the task already finished.
+    /// Requests cancellation by aborting the task.
+    ///
+    /// Deliberately posts nothing. Whether the operation counts as cancelled
+    /// is decided by whether the task had already finished, which only its
+    /// `JoinHandle` knows -- see [`spawn`]. An earlier version answered that
+    /// question with a flag here, and a read whose future had already taken
+    /// bytes off the stream lost them when cancellation won the swap.
     pub fn cancel(&self) {
         self.cancel_requested.store(true, Ordering::SeqCst);
         if let Some(handle) = self.abort.lock().expect("op poisoned").as_ref() {
             handle.abort();
-        }
-        if !self.finished.swap(true, Ordering::SeqCst) {
-            *self.result.lock().expect("op poisoned") =
-                Some(Err(Error::new(ErrKind::Cancelled, "operation cancelled")));
-            completions().push(self.id, COMPLETION_CANCELLED);
         }
     }
 
@@ -226,18 +218,29 @@ where
     let op = Arc::new(Op::new(id));
     registry::publish(id, op.clone());
 
-    let task_op = op.clone();
-    let join = runtime().spawn(async move {
-        let r = fut.await;
-        task_op.complete(r);
-    });
-
+    let join = runtime().spawn(fut);
     *op.abort.lock().expect("op poisoned") = Some(join.abort_handle());
     // A cancel that arrived before the abort handle was stored would have
     // found `None`; honour it now.
     if op.cancel_requested.load(Ordering::SeqCst) {
         join.abort();
     }
+
+    // A supervisor posts the completion rather than the task itself, so that
+    // "did this finish?" is answered by the JoinHandle instead of by a flag
+    // racing the task. A task that completed its work reports that work even
+    // if an abort arrived a moment later; only a task that really was stopped
+    // before finishing reports cancellation.
+    let sup = op.clone();
+    runtime().spawn(async move {
+        sup.post(match join.await {
+            Ok(r) => r,
+            Err(e) if e.is_cancelled() => {
+                Err(Error::new(ErrKind::Cancelled, "operation cancelled"))
+            }
+            Err(_) => Err(Error::internal("operation panicked")),
+        });
+    });
     id
 }
 
@@ -249,7 +252,7 @@ pub fn spawn_ready(r: Result<OpValue>) -> u64 {
     let id = registry::reserve();
     let op = Arc::new(Op::new(id));
     registry::publish(id, op.clone());
-    op.complete(r);
+    op.post(r);
     id
 }
 
@@ -280,6 +283,22 @@ mod tests {
         });
         ops_get(id).cancel();
         assert!(matches!(wait(5_000), Wait::Ready(op, COMPLETION_CANCELLED) if op == id));
+        registry::remove(id);
+
+        // A task that already produced a value reports it even though an
+        // abort follows. Cancelling means "stop if you have not finished",
+        // never "discard what you did" -- bytes a read took off a stream are
+        // gone from it whatever Go decides afterwards.
+        let id = spawn(async { Ok(OpValue::Bytes(b"already read".to_vec())) });
+        let op = ops_get(id);
+        // Let the work task finish, then abort the already-finished task.
+        std::thread::sleep(Duration::from_millis(100));
+        op.cancel();
+        assert!(matches!(wait(5_000), Wait::Ready(o, COMPLETION_OK) if o == id));
+        match op.take_result() {
+            Ok(OpValue::Bytes(b)) => assert_eq!(b, b"already read"),
+            _ => panic!("a finished operation lost its result to a late cancel"),
+        }
         registry::remove(id);
 
         // A handle produced by an op whose result is never claimed is freed
