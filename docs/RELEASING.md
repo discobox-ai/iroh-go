@@ -17,9 +17,9 @@ history per change. Correctness on every push is already covered by `ci.yml`,
 which builds a fresh library from your Rust changes and runs the whole Go suite
 against it.
 
-The workflow builds the six cross-compilable platforms on Linux, the two macOS
-ones on a Mac, runs the Go suite on real hardware for all eight, and only then
-commits them to the branch you dispatched from.
+The workflow builds the four Linux platforms on a Linux runner, and macOS and
+Windows on hosts of their own OS. It then runs the Go suite on real hardware
+for all eight, and only then commits them to the branch you dispatched from.
 
 Locally, `make libs` does as much as your machine can:
 
@@ -28,34 +28,29 @@ make libs                              # everything this host can target
 make libs PLATFORMS="linux_arm64"      # or specific ones
 ```
 
-It needs [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) (plus
-[zig](https://ziglang.org/download/)) and
-[cargo-xwin](https://github.com/rust-cross/cargo-xwin):
+It needs [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) and
+[zig](https://ziglang.org/download/):
 
 ```
-cargo install --locked cargo-zigbuild cargo-xwin
+cargo install --locked cargo-zigbuild
 ```
 
-The Windows targets need a little more: cargo-xwin supplies Microsoft's CRT
-and SDK but not the compiler, so LLVM and nasm have to be present too (cc-rs
-calls `llvm-lib` and `clang-cl`, and ring assembles its x86_64 Windows
-assembly with nasm). On Ubuntu:
+That covers the four Linux targets — gnu and musl on both architectures —
+from any host.
 
-```
-sudo apt-get install -y clang llvm lld nasm
-export PATH="$(dirname "$(readlink -f "$(command -v clang)")"):$PATH"
-```
+**macOS and Windows are built on a host of that OS.**
 
-`build-libs.sh` checks for all of this up front and names whatever is missing.
+macOS cannot be cross-compiled, and no amount of tooling fixes it: iroh links
+the `SystemConfiguration` and `CoreFoundation` frameworks, which ship only in
+Apple's SDK, and Apple licenses that SDK for use on Apple hardware. Ad-hoc code
+signing is required for arm64 dylibs to load at all, too.
 
-That covers Linux gnu and musl on both architectures, and Windows on both —
-cargo-xwin targets the MSVC ABI without a Windows machine.
-
-**macOS cannot be cross-compiled**, and no amount of tooling fixes it. iroh
-links the `SystemConfiguration` and `CoreFoundation` frameworks, which ship
-only in Apple's SDK, and Apple licenses that SDK for use on Apple hardware.
-Ad-hoc code signing is required for arm64 dylibs to load at all, too. Build
-those two on a Mac, or let the workflow do it.
+Windows can be cross-compiled in principle, with
+[cargo-xwin](https://github.com/rust-cross/cargo-xwin), but `ring` does not
+build that way: cargo-xwin passes clang-cl style `/imsvc` include flags while
+`cc-rs` invokes plain `clang`, which rejects them. Native MSVC is free on
+public repos and simply works, so the workflow uses a Windows runner. If you
+want to revisit the cross path, that flag mismatch is the thing to solve.
 
 Whatever you build locally, remember that cross-compiling proves a library
 *links*, not that it *works* — these are `dlopen`'d at runtime with no

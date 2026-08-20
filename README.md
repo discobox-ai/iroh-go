@@ -129,14 +129,19 @@ make vet        # go vet, gofmt, cargo fmt, clippy
 make cross      # check every platform still compiles without cgo
 ```
 
-`make libs` cross-builds the shipping artifacts for release prep. Six of the
-eight platforms build from any host given
-[cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) and
-[cargo-xwin](https://github.com/rust-cross/cargo-xwin) — Windows included,
-since cargo-xwin targets the MSVC ABI without a Windows machine. The two macOS
-targets cannot: iroh links the `SystemConfiguration` and `CoreFoundation`
-frameworks, which ship only in Apple's SDK, and Apple licenses that SDK for use
-on Apple hardware. The script says so and skips them rather than failing.
+`make libs` cross-builds the shipping artifacts for release prep. The four
+Linux targets — gnu and musl, both architectures — build from any host given
+[cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild), which also pins
+a glibc floor of 2.17 so they run on far older distributions than the build
+machine.
+
+macOS and Windows are built on a host of that OS, and the script says so and
+skips them rather than failing. macOS cannot be cross-compiled at all: iroh
+links the `SystemConfiguration` and `CoreFoundation` frameworks, which ship
+only in Apple's SDK, licensed by Apple for use on Apple hardware. Windows can
+be in principle, via cargo-xwin, but `ring` does not build that way — cargo-xwin
+passes clang-cl style `/imsvc` include flags while `cc-rs` invokes plain
+`clang`, which rejects them.
 
 Cross-compiling only proves a library links, though. Since these are `dlopen`'d
 at runtime with no fallback, a broken one fails in the user's process rather

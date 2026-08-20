@@ -5,13 +5,18 @@
 # Usage: scripts/build-libs.sh [<platform>...]
 # With no arguments it attempts every platform.
 #
-# Six of the eight platforms cross-compile from any host given cargo-zigbuild
-# and cargo-xwin. The two macOS targets do not, and cannot be fixed by
-# installing something: iroh links the SystemConfiguration and CoreFoundation
-# frameworks, which ship only in Apple's SDK, and Apple licenses that SDK for
-# use on Apple hardware. On top of that, arm64 dylibs must be at least ad-hoc
-# signed before macOS will load them. So darwin is built on a Mac -- by a
-# developer running this script there, or by the build-libs workflow.
+# The four Linux targets cross-compile from any host given cargo-zigbuild.
+# macOS and Windows are built on a host of that OS.
+#
+# macOS cannot be cross-compiled at all: iroh links the SystemConfiguration
+# and CoreFoundation frameworks, which ship only in Apple's SDK, and Apple
+# licenses that SDK for use on Apple hardware. arm64 dylibs also need at
+# least ad-hoc signing before macOS will load them.
+#
+# Windows can be, in principle, with cargo-xwin. In practice ring does not
+# build that way: cargo-xwin passes clang-cl style /imsvc include flags while
+# cc-rs invokes plain clang, which rejects them. Native MSVC is free on
+# public repos and simply works, so that is what the workflow uses.
 #
 # Cross-compiling also only proves a library links, not that it works. Ship
 # libraries that the smoke job in .github/workflows/build-libs.yml has
@@ -33,8 +38,8 @@ host_os() {
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
-# builder_ready reports whether this machine can drive a given builder, and
-# explains what is missing when it cannot.
+# builder_ready reports whether this machine can drive a given builder for a
+# given platform, and explains what is missing when it cannot.
 builder_ready() {
 	case "$1" in
 	zig)
@@ -42,24 +47,14 @@ builder_ready() {
 		echo "cargo-zigbuild and zig (cargo install --locked cargo-zigbuild; https://ziglang.org/download/)"
 		return 1
 		;;
-	xwin)
-		# cargo-xwin supplies Microsoft's CRT and SDK but not the compiler:
-		# cc-rs invokes llvm-lib and clang-cl from LLVM, and ring assembles
-		# its x86_64 Windows assembly with nasm. Check for all three, or the
-		# failure surfaces deep inside ring's build script instead.
-		missing=""
-		have cargo-xwin || missing="$missing cargo-xwin (cargo install --locked cargo-xwin)"
-		have nasm || missing="$missing nasm"
-		if ! have llvm-lib && ! { have clang && [ -x "$(dirname "$(readlink -f "$(command -v clang)")")/llvm-lib" ]; }; then
-			missing="$missing llvm/clang (llvm-lib not found; on Ubuntu it lives in /usr/lib/llvm-*/bin)"
-		fi
-		[ -z "$missing" ] && return 0
-		echo "${missing# }"
-		return 1
-		;;
 	native)
-		if [ "$(host_os)" = darwin ]; then return 0; fi
-		echo "a macOS host (Apple's SDK is not redistributable, so this cannot be cross-compiled)"
+		want="${2%%_*}"
+		if [ "$(host_os)" = "$want" ]; then return 0; fi
+		case "$want" in
+		darwin) echo "a macOS host (Apple's SDK is not redistributable, so this cannot be cross-compiled)" ;;
+		windows) echo "a Windows host (ring does not build under cargo-xwin; see the notes at the top of this script)" ;;
+		*) echo "a $want host" ;;
+		esac
 		return 1
 		;;
 	esac
@@ -68,7 +63,6 @@ builder_ready() {
 build_cmd() {
 	case "$1" in
 	zig) echo "cargo zigbuild" ;;
-	xwin) echo "cargo xwin build" ;;
 	native) echo "cargo build" ;;
 	esac
 }
@@ -89,7 +83,7 @@ for entry in $IROH_TARGETS; do
 		[ "$match" = yes ] || continue
 	fi
 
-	if ! missing="$(builder_ready "$builder")"; then
+	if ! missing="$(builder_ready "$builder" "$platform")"; then
 		echo "skip  $platform -- needs $missing"
 		skipped+=("$platform")
 		continue

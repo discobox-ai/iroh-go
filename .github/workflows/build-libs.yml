@@ -20,8 +20,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Six of the eight platforms cross-compile from Linux. Windows included:
-  # cargo-xwin targets the MSVC ABI without a Windows machine.
+  # The four Linux targets cross-compile from one Linux runner via zig, which
+  # also pins a glibc floor the runner's own libc could not give us.
   cross:
     runs-on: ubuntu-latest
     strategy:
@@ -32,8 +32,6 @@ jobs:
           - linux_arm64
           - linux_amd64_musl
           - linux_arm64_musl
-          - windows_amd64
-          - windows_arm64
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -41,28 +39,8 @@ jobs:
         with:
           workspaces: rust
           key: ${{ matrix.platform }}
-      # Linux targets go through zig; Windows targets go through cargo-xwin,
-      # which needs neither zig nor a Windows machine.
-      - if: startsWith(matrix.platform, 'linux')
-        uses: mlugg/setup-zig@v2
-      - if: startsWith(matrix.platform, 'linux')
-        run: cargo install --locked cargo-zigbuild
-      - if: startsWith(matrix.platform, 'windows')
-        name: Install the toolchain cargo-xwin drives
-        run: |
-          # cargo-xwin supplies Microsoft's CRT and SDK, but not the compiler:
-          # cc-rs invokes llvm-lib and clang-cl from LLVM, and ring assembles
-          # its x86_64 Windows assembly with nasm.
-          sudo apt-get update
-          sudo apt-get install -y clang llvm lld nasm
-          # Ubuntu keeps llvm-lib in the versioned LLVM directory rather than
-          # symlinking it into /usr/bin, so put that directory on PATH.
-          llvmbin="$(dirname "$(readlink -f "$(command -v clang)")")"
-          echo "$llvmbin" >> "$GITHUB_PATH"
-          echo "using $llvmbin"
-          ls "$llvmbin" | grep -E '^(llvm-lib|lld-link|clang-cl)$'
-      - if: startsWith(matrix.platform, 'windows')
-        run: cargo install --locked cargo-xwin
+      - uses: mlugg/setup-zig@v2
+      - run: cargo install --locked cargo-zigbuild
       - run: ./scripts/build-libs.sh ${{ matrix.platform }}
       - uses: actions/upload-artifact@v4
         with:
@@ -92,12 +70,40 @@ jobs:
           name: lib-${{ matrix.platform }}
           path: libs/${{ matrix.platform }}/lib/iroh_go.lib*
 
+  # Windows is built natively too. cargo-xwin can target the MSVC ABI from
+  # Linux in principle, but ring does not build that way -- cargo-xwin passes
+  # clang-cl style /imsvc include flags while cc-rs invokes plain clang, which
+  # rejects them. Native MSVC is free on public repos and simply works.
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows_amd64
+            os: windows-latest
+          - platform: windows_arm64
+            os: windows-11-arm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: ${{ matrix.platform }}
+      - shell: bash
+        run: ./scripts/build-libs.sh ${{ matrix.platform }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lib-${{ matrix.platform }}
+          path: libs/${{ matrix.platform }}/lib/iroh_go.lib*
+
   # Cross-compiling proves a library links, not that it works. These libraries
   # are dlopen'd at runtime with no fallback, so a broken one fails in the
   # user's process rather than at their compile time. Run the real suite on
   # real hardware before anything is committed.
   smoke:
-    needs: [cross, darwin]
+    needs: [cross, darwin, windows]
     strategy:
       fail-fast: false
       matrix:
