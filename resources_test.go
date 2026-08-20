@@ -64,7 +64,7 @@ func TestCancelledOperationsAreReaped(t *testing.T) {
 	ctx := testContext(t)
 	ep := mustBind(t, ctx, localOptions(testALPN))
 
-	before := handleCount(t)
+	before := stableHandleCount(t)
 
 	for i := 0; i < 50; i++ {
 		acceptCtx, cancel := context.WithTimeout(ctx, time.Millisecond)
@@ -80,7 +80,10 @@ func TestCancelledOperationsAreReaped(t *testing.T) {
 	if pending := ffi.PendingOps(); pending != 0 {
 		t.Errorf("%d operations still pending after cancellation", pending)
 	}
-	if after := handleCount(t); after != before {
+	// Growth is the leak signal, as in TestStreamsDoNotLeakHandles: a drop
+	// only means a cleanup for an object some earlier test dropped ran inside
+	// the measured window.
+	if after := stableHandleCount(t); after > before {
 		t.Errorf("handle count grew from %d to %d across 50 cancelled accepts", before, after)
 	}
 }
