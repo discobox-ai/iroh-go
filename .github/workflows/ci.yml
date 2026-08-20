@@ -106,7 +106,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: stable
-      - run: CGO_ENABLED=0 go test -count=1 ./...
+      # Set via env rather than `CGO_ENABLED=0 go test`: the default shell on
+      # the Windows runners is PowerShell, which has no inline assignment.
+      - run: go test -count=1 ./...
+        env:
+          CGO_ENABLED: "0"
 
   # The point of the whole exercise: every target still builds with no C
   # compiler and no cgo.
