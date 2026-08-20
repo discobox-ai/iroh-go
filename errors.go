@@ -74,10 +74,15 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
+	// Both halves. The kind is what a caller branches on and the message is
+	// what a person reads; printing only the message dropped the
+	// classification, and an operation that failed without one printed a bare
+	// "iroh: connection lost" with no hint of what had been attempted.
+	kind := sentinelFor(e.Kind).Error()
 	if e.Msg == "" {
-		return sentinelFor(e.Kind).Error()
+		return kind
 	}
-	return "iroh: " + e.Msg
+	return kind + ": " + e.Msg
 }
 
 // Unwrap yields the sentinel for this error's kind, which is what makes

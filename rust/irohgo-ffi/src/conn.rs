@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use iroh::endpoint::{Connection, VarInt};
+use iroh::endpoint::{Connection, ConnectionError, VarInt};
 
 use crate::error::{ErrKind, Error, Result};
 use crate::ffi::{self, ffi_guard, ffi_try, FFI_OK};
@@ -18,8 +18,13 @@ fn conn(handle: u64) -> Result<Arc<Connection>> {
     registry::get::<Connection>(handle)
 }
 
-fn stream_err(e: impl std::fmt::Display) -> Error {
-    Error::new(ErrKind::Stream, e)
+/// Opening or accepting a stream fails only when the connection itself is
+/// gone, so it is reported as such. The distinction is the one thing a caller
+/// pooling connections has to branch on: a lost connection means every other
+/// stream on it is gone too and the peer must be redialled, while a stream
+/// error means only that stream is over.
+fn conn_err(e: ConnectionError) -> Error {
+    Error::new(ErrKind::Connection, e)
 }
 
 /// Opens a bidirectional stream. Yields `(send, recv)` handles.
@@ -31,7 +36,7 @@ pub extern "C" fn iroh_conn_open_bi(handle: u64) -> u64 {
             Err(e) => return ops::spawn_ready(Err(e)),
         };
         ops::spawn(async move {
-            let (send, recv) = conn.open_bi().await.map_err(stream_err)?;
+            let (send, recv) = conn.open_bi().await.map_err(conn_err)?;
             Ok(OpValue::Handle2(
                 registry::insert(SendHandle::new(send)),
                 registry::insert(RecvHandle::new(recv)),
@@ -49,7 +54,7 @@ pub extern "C" fn iroh_conn_accept_bi(handle: u64) -> u64 {
             Err(e) => return ops::spawn_ready(Err(e)),
         };
         ops::spawn(async move {
-            let (send, recv) = conn.accept_bi().await.map_err(stream_err)?;
+            let (send, recv) = conn.accept_bi().await.map_err(conn_err)?;
             Ok(OpValue::Handle2(
                 registry::insert(SendHandle::new(send)),
                 registry::insert(RecvHandle::new(recv)),
@@ -67,7 +72,7 @@ pub extern "C" fn iroh_conn_open_uni(handle: u64) -> u64 {
             Err(e) => return ops::spawn_ready(Err(e)),
         };
         ops::spawn(async move {
-            let send = conn.open_uni().await.map_err(stream_err)?;
+            let send = conn.open_uni().await.map_err(conn_err)?;
             Ok(OpValue::Handle(registry::insert(SendHandle::new(send))))
         })
     })
@@ -82,7 +87,7 @@ pub extern "C" fn iroh_conn_accept_uni(handle: u64) -> u64 {
             Err(e) => return ops::spawn_ready(Err(e)),
         };
         ops::spawn(async move {
-            let recv = conn.accept_uni().await.map_err(stream_err)?;
+            let recv = conn.accept_uni().await.map_err(conn_err)?;
             Ok(OpValue::Handle(registry::insert(RecvHandle::new(recv))))
         })
     })
