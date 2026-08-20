@@ -48,6 +48,20 @@ jobs:
       - if: startsWith(matrix.platform, 'linux')
         run: cargo install --locked cargo-zigbuild
       - if: startsWith(matrix.platform, 'windows')
+        name: Install the toolchain cargo-xwin drives
+        run: |
+          # cargo-xwin supplies Microsoft's CRT and SDK, but not the compiler:
+          # cc-rs invokes llvm-lib and clang-cl from LLVM, and ring assembles
+          # its x86_64 Windows assembly with nasm.
+          sudo apt-get update
+          sudo apt-get install -y clang llvm lld nasm
+          # Ubuntu keeps llvm-lib in the versioned LLVM directory rather than
+          # symlinking it into /usr/bin, so put that directory on PATH.
+          llvmbin="$(dirname "$(readlink -f "$(command -v clang)")")"
+          echo "$llvmbin" >> "$GITHUB_PATH"
+          echo "using $llvmbin"
+          ls "$llvmbin" | grep -E '^(llvm-lib|lld-link|clang-cl)$'
+      - if: startsWith(matrix.platform, 'windows')
         run: cargo install --locked cargo-xwin
       - run: ./scripts/build-libs.sh ${{ matrix.platform }}
       - uses: actions/upload-artifact@v4

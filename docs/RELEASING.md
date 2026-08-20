@@ -36,6 +36,18 @@ It needs [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) (plus
 cargo install --locked cargo-zigbuild cargo-xwin
 ```
 
+The Windows targets need a little more: cargo-xwin supplies Microsoft's CRT
+and SDK but not the compiler, so LLVM and nasm have to be present too (cc-rs
+calls `llvm-lib` and `clang-cl`, and ring assembles its x86_64 Windows
+assembly with nasm). On Ubuntu:
+
+```
+sudo apt-get install -y clang llvm lld nasm
+export PATH="$(dirname "$(readlink -f "$(command -v clang)")"):$PATH"
+```
+
+`build-libs.sh` checks for all of this up front and names whatever is missing.
+
 That covers Linux gnu and musl on both architectures, and Windows on both —
 cargo-xwin targets the MSVC ABI without a Windows machine.
 

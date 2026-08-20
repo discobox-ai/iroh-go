@@ -43,8 +43,18 @@ builder_ready() {
 		return 1
 		;;
 	xwin)
-		if have cargo-xwin; then return 0; fi
-		echo "cargo-xwin (cargo install --locked cargo-xwin)"
+		# cargo-xwin supplies Microsoft's CRT and SDK but not the compiler:
+		# cc-rs invokes llvm-lib and clang-cl from LLVM, and ring assembles
+		# its x86_64 Windows assembly with nasm. Check for all three, or the
+		# failure surfaces deep inside ring's build script instead.
+		missing=""
+		have cargo-xwin || missing="$missing cargo-xwin (cargo install --locked cargo-xwin)"
+		have nasm || missing="$missing nasm"
+		if ! have llvm-lib && ! { have clang && [ -x "$(dirname "$(readlink -f "$(command -v clang)")")/llvm-lib" ]; }; then
+			missing="$missing llvm/clang (llvm-lib not found; on Ubuntu it lives in /usr/lib/llvm-*/bin)"
+		fi
+		[ -z "$missing" ] && return 0
+		echo "${missing# }"
 		return 1
 		;;
 	native)
