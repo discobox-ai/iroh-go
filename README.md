@@ -46,9 +46,10 @@ runs the same way your users build.
 
 Each platform's library lives in its own Go module under `libs/`, so `go build`
 downloads only the one you need rather than all of them. Those modules are
-versioned on iroh's major and minor -- `libs/*/v1.0.x` is iroh 1.0 -- with the
-patch reserved for changes to the binding's own Rust shim. `iroh.IrohVersion()`
-reports the exact upstream version compiled into the library you loaded. Linux builds pin a
+versioned alongside this one while the API settles; `iroh.IrohVersion()`
+reports the exact iroh version compiled into the library you loaded. From v1
+onward the libs modules will track iroh's own major and minor -- see
+[docs/RELEASING.md](docs/RELEASING.md). Linux builds pin a
 glibc floor of 2.17, so they run on distributions much older than the machine
 that built them.
 

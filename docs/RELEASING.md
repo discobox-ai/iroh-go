@@ -68,36 +68,35 @@ yourself, `git add -f libs/<platform>/lib/` is the deliberate override.
 
 ## 2. Tag the platform modules
 
-The libs modules carry compiled Rust, so their versions track **iroh's major
-and minor**, with the patch reserved for changes to the shim in
-`rust/irohgo-ffi`:
+**Today everything is `v0.x`, and the root and libs modules move together.**
+Both are pre-1.0: the Go API is still growing (no `Incoming`/0-RTT, watchers or
+`ServicesClient` yet), and a `v1` on the libs would commit their import paths
+for the whole iroh 1.x line before that is worth promising.
 
-| iroh    | libs tag             |
-| ------- | -------------------- |
-| 1.0.3   | `v1.0.0`             |
-| 1.0.3   | `v1.0.1` (shim fix)  |
-| 1.0.4   | `v1.0.2` (shim same, upstream patch) |
-| 1.1.0   | `v1.1.0`             |
-| 2.0.0   | `v2.0.0`, and the module paths gain a `/v2` suffix |
+The exact upstream version is not in the tag and does not need to be. It is
+baked into each library from `rust/Cargo.lock` at build time, reported by
+`iroh.IrohVersion()`, and pinned by `TestIrohVersionMatchesTheLockfile` so it
+cannot drift from what is actually compiled in.
 
-The patch digit is ours because a libs module is iroh *plus* our shim, and the
-shim changes on its own schedule -- it has already needed a correctness fix
-while iroh stood still. Tying the patch to upstream would leave two different
-libraries both claiming to be "1.0.3", one of them with a bug.
+**When these bindings reach `v1`**, the libs modules adopt iroh's major and
+minor, with the patch reserved for changes to the shim in `rust/irohgo-ffi`:
 
-iroh's own patch digit is therefore not in the tag. It is not lost: the exact
-locked version is baked into the library at build time and reported by
-`iroh.IrohVersion()`, and `TestIrohVersionMatchesTheLockfile` asserts it
-against `rust/Cargo.lock` so it cannot drift.
+| iroh at the time | libs tag |
+| ---------------- | -------- |
+| 1.0.x            | `v1.0.0`, then `v1.0.1` for shim fixes |
+| 1.2.x            | `v1.2.0` |
+| 2.0.x            | `v2.0.0`, and the module paths gain a `/v2` suffix |
 
-**The root module versions separately**, on its own Go API, and stays at `v0.x`
-until that API settles. A repository where `libs/linux_amd64` is at `v1.0.0`
-and the root is at `v0.2.0` is correct: they promise different things.
+The patch stays ours because a libs module is iroh *plus* the shim, and the
+shim moves on its own schedule -- it needed a correctness fix while iroh stood
+still. Tying it to upstream would leave two different libraries both claiming
+one version, one of them with a bug. Note that the first `v1` libs tag has to
+match iroh's minor *at that moment*, so it will not necessarily be `v1.0.0`.
 
 Tag each libs module with its directory as the prefix:
 
 ```
-V=v1.0.0
+V=v0.1.0
 for p in linux_amd64 linux_amd64_musl linux_arm64 linux_arm64_musl \
          darwin_amd64 darwin_arm64 windows_amd64 windows_arm64; do
   git tag "libs/$p/$V"
@@ -107,38 +106,50 @@ git push --tags
 
 ## 3. Point the root module at the published versions
 
-Drop the `replace` block and set the real versions:
+The root `go.mod` keeps its `replace` directives -- Go applies them only when
+this repo is the main module, so contributors build against the libraries they
+just built with `make lib`, while consumers resolve the published versions and
+ignore the replaces entirely.
+
+What must change each release is the *required* versions:
 
 ```
-V=v1.0.0
+V=v0.1.0
 for p in linux_amd64 linux_amd64_musl linux_arm64 linux_arm64_musl \
          darwin_amd64 darwin_arm64 windows_amd64 windows_arm64; do
-  go mod edit -dropreplace "github.com/discobox-ai/iroh-go/libs/$p"
   go mod edit -require "github.com/discobox-ai/iroh-go/libs/$p@$V"
 done
-go mod tidy
 ```
 
-Verify against the published modules:
+Because the replaces mask a missing tag, a build here proves nothing about a
+consumer's. Verify the way a consumer resolves it, in a scratch module outside
+this repo:
 
 ```
-CGO_ENABLED=0 go build ./...
-CGO_ENABLED=0 go test ./...
-make cross
+cd "$(mktemp -d)" && go mod init check
+GOFLAGS=-mod=mod go get github.com/discobox-ai/iroh-go@v0.1.0
+cat > main.go <<'GO'
+package main
+
+import ("fmt"; "github.com/discobox-ai/iroh-go")
+
+func main() { v, err := iroh.IrohVersion(); fmt.Println(v, err) }
+GO
+CGO_ENABLED=0 go run .
 ```
 
-Commit, then tag the root module on its own line -- `v0.2.0`, not the libs
-version:
+Then tag the root module:
 
 ```
-git tag v0.2.0
+git tag v0.1.0
 git push --tags
 ```
 
-## 4. Restore the replaces for development
+## 4. Nothing to restore
 
-The `replace` block goes back on `main` after the release tag, so contributors
-keep building against their locally built libraries.
+The `replace` block stays in `main` permanently. It is inert for consumers, so
+there is no add-and-remove dance around each release -- only the required
+versions move.
 
 ## Bumping iroh
 
