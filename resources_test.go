@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"os"
 	"runtime"
 	"testing"
@@ -204,8 +205,10 @@ func TestEndpointIDFormattingMatchesIroh(t *testing.T) {
 	}
 }
 
-func TestReadDeadline(t *testing.T) {
-	ctx := testContext(t)
+// idleStream opens a bidirectional stream to a peer that accepts it and then
+// sends nothing, so a read on it blocks until a deadline ends it.
+func idleStream(t *testing.T, ctx context.Context) *iroh.RecvStream {
+	t.Helper()
 
 	server := mustBind(t, ctx, localOptions(testALPN))
 	client := mustBind(t, ctx, localOptions())
@@ -220,8 +223,6 @@ func TestReadDeadline(t *testing.T) {
 		if err != nil {
 			return
 		}
-		// Open the stream but never send anything, so the client's read
-		// has nothing to do but time out.
 		if _, _, err := conn.AcceptBi(ctx); err != nil {
 			return
 		}
@@ -232,32 +233,83 @@ func TestReadDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	defer conn.Close()
+	t.Cleanup(func() { conn.Close() })
 
 	send, recv, err := conn.OpenBi(ctx)
 	if err != nil {
 		t.Fatalf("open bi: %v", err)
 	}
+	// A stream only reaches the peer once something is written on it.
 	if _, err := send.Write([]byte("hello")); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+	return recv
+}
+
+func TestReadDeadline(t *testing.T) {
+	ctx := testContext(t)
+	recv := idleStream(t, ctx)
 
 	if err := recv.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
 		t.Fatal(err)
 	}
 	buf := make([]byte, 16)
 	start := time.Now()
-	if _, err := recv.Read(buf); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("want DeadlineExceeded, got %v", err)
+	err := func() error {
+		_, err := recv.Read(buf)
+		return err
+	}()
+	if !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("want os.ErrDeadlineExceeded, got %v", err)
+	}
+	// net.Conn's contract, which net/http and most other callers detect by
+	// asserting net.Error rather than by unwrapping.
+	if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+		t.Fatalf("read error %v does not report itself as a net.Error timeout", err)
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Errorf("deadline took %v to fire", elapsed)
 	}
 
-	// A cancelled read consumes nothing, so reading again still works once
-	// the deadline is cleared and data arrives.
+	// A read stopped by a deadline consumes nothing, so reading again still
+	// works once the deadline is cleared and data arrives.
 	if err := recv.SetReadDeadline(time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	_ = iroh.LibraryPlatform()
+}
+
+// A deadline must reach a read that is *already* blocked, not merely bound
+// the next one: net/http aborts a hijacked connection's pending background
+// read by setting a deadline in the past and waiting for that read to return,
+// so a websocket upgrade over one of these streams deadlocks without this.
+func TestReadDeadlineInterruptsABlockedRead(t *testing.T) {
+	ctx := testContext(t)
+	recv := idleStream(t, ctx)
+
+	done := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 16)
+		_, err := recv.Read(buf)
+		done <- err
+	}()
+
+	// Nothing is ever sent on this stream, so the read cannot end on its own.
+	select {
+	case err := <-done:
+		t.Fatalf("read returned before any deadline was set: %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	if err := recv.SetReadDeadline(time.Now().Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("want os.ErrDeadlineExceeded, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a deadline set in the past did not end the blocked read")
+	}
 }
