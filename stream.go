@@ -212,13 +212,18 @@ func (s *SendStream) Reset(ctx context.Context, code uint64) error {
 
 // Close finishes the stream, signalling a clean end to the peer. It does not
 // wait for the peer to acknowledge the data; use [SendStream.Stopped] for
-// that. Close is idempotent, and safe to call from another goroutine while a
-// write is in flight.
+// that. Close is idempotent.
 //
 // It expires the write deadline without being bound by one. A write in flight
 // holds the stream inside the library and the finish would wait behind it,
 // while a Close that skipped the finish because the last write had timed out
 // would leave the peer waiting for data that is never coming.
+//
+// Expiring the deadline is also what makes Close safe to call while a
+// [SendStream.Write] is in flight. A write made through
+// [SendStream.WriteContext] answers to the context it was given instead, so
+// Close waits behind that one: cancel it to close the stream out from under
+// a write of that kind.
 func (s *SendStream) Close() error {
 	h := s.h.take()
 	if h == 0 {
@@ -311,12 +316,14 @@ func (r *RecvStream) Stop(ctx context.Context, code uint64) error {
 	return ffi.RecvStop(ctx, h, code)
 }
 
-// Close stops the stream with a zero error code. It is idempotent, and safe
-// to call from another goroutine while a read is in flight.
+// Close stops the stream with a zero error code. It is idempotent.
 //
 // Like [SendStream.Close] it expires the deadline first: a read in flight
 // holds the stream inside the library, and a read with no deadline never ends
-// on its own, so stopping it would wait forever behind it.
+// on its own, so stopping it would wait forever behind it. That is what makes
+// Close safe to call while a [RecvStream.Read] is in flight -- but a read made
+// through [RecvStream.ReadContext] answers to the context it was given, so
+// Close waits behind that one until its context is cancelled.
 func (r *RecvStream) Close() error {
 	r.deadline.set(pastDeadline)
 	return r.Stop(context.Background(), 0)
