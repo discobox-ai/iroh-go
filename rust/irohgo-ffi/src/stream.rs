@@ -9,7 +9,9 @@
 
 use std::sync::Arc;
 
-use iroh::endpoint::{RecvStream, SendStream, VarInt};
+use iroh::endpoint::{
+    ConnectionError, ReadError, RecvStream, SendStream, StoppedError, VarInt, WriteError,
+};
 use tokio::sync::Mutex;
 
 use crate::error::{ErrKind, Error, Result};
@@ -57,6 +59,35 @@ fn stream_err(e: impl std::fmt::Display) -> Error {
     Error::new(ErrKind::Stream, e)
 }
 
+/// A failure of the connection rather than of this stream. Every stream on
+/// that connection is gone with it and the peer has to be redialled, which is
+/// a different thing for the caller to do than retrying one stream -- so the
+/// two do not share a kind.
+fn conn_err(e: ConnectionError) -> Error {
+    Error::new(ErrKind::Connection, e)
+}
+
+fn read_err(e: ReadError) -> Error {
+    match e {
+        ReadError::ConnectionLost(e) => conn_err(e),
+        other => stream_err(other),
+    }
+}
+
+fn write_err(e: WriteError) -> Error {
+    match e {
+        WriteError::ConnectionLost(e) => conn_err(e),
+        other => stream_err(other),
+    }
+}
+
+fn stopped_err(e: StoppedError) -> Error {
+    match e {
+        StoppedError::ConnectionLost(e) => conn_err(e),
+        other => stream_err(other),
+    }
+}
+
 /// Writes some of `data`. Yields the number of bytes accepted.
 #[no_mangle]
 pub extern "C" fn iroh_send_write(handle: u64, data: *const u8, data_len: usize) -> u64 {
@@ -75,7 +106,7 @@ pub extern "C" fn iroh_send_write(handle: u64, data: *const u8, data_len: usize)
                 .await
                 .write(&data)
                 .await
-                .map_err(stream_err)?;
+                .map_err(write_err)?;
             Ok(OpValue::U64(n as u64))
         })
     })
@@ -161,7 +192,7 @@ pub extern "C" fn iroh_send_stopped(handle: u64) -> u64 {
                 .await
                 .stopped()
                 .await
-                .map_err(stream_err)?;
+                .map_err(stopped_err)?;
             Ok(OpValue::U64(code.map(u64::from).unwrap_or(NO_STOP_CODE)))
         })
     })
@@ -192,7 +223,7 @@ pub extern "C" fn iroh_recv_read(handle: u64, max_len: usize) -> u64 {
                 .await
                 .read_chunk(max_len)
                 .await
-                .map_err(stream_err)?;
+                .map_err(read_err)?;
             Ok(match chunk {
                 Some(bytes) => OpValue::Bytes(bytes.to_vec()),
                 None => OpValue::Eof,
