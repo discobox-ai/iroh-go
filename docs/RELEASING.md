@@ -58,8 +58,10 @@ fallback. Only ship libraries the workflow's smoke jobs have actually run the
 Go suite against.
 
 The libraries are committed to git — roughly 15 MB each, ~120 MB across
-platforms. That is the cost of embedding them in per-platform modules; users
-only ever download the one module their build needs.
+platforms. That is the cost of embedding them in per-platform modules. In
+return `go build` fetches only the platform it is building, about 6MB
+compressed; `go get` and `go mod tidy` fetch all eight once, because Go records
+checksums across every platform.
 
 They are also listed in `.gitignore`, so a local `make lib` build cannot be
 committed by hand. Only the workflow commits them, with `git add -f`, and only

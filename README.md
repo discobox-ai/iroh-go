@@ -44,8 +44,11 @@ runs the same way your users build.
 | macOS   | ✅    | ✅    |
 | Windows | ✅    | ✅    |
 
-Each platform's library lives in its own Go module under `libs/`, so `go build`
-downloads only the one you need rather than all of them. Those modules are
+Each platform's library lives in its own Go module under `libs/`, so a build
+fetches about 6MB rather than all 45MB: `go build` downloads only the module
+for the platform it is building. Adding the dependency does cost the full set
+once -- `go get` and `go mod tidy` record checksums for every platform, so they
+fetch all eight -- but after that only the one you build for is used. Those modules are
 versioned alongside this one while the API settles; `iroh.IrohVersion()`
 reports the exact iroh version compiled into the library you loaded. From v1
 onward the libs modules will track iroh's own major and minor -- see
