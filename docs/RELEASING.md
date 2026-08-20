@@ -84,10 +84,20 @@ return `go build` fetches only the platform it is building, about 6MB
 compressed; `go get` and `go mod tidy` fetch all eight once, because Go records
 checksums across every platform.
 
-They are also listed in `.gitignore`, so a local `make lib` build cannot be
-committed by hand. Only the workflow commits them, with `git add -f`, and only
-after every one has passed its smoke job. If you ever do need to commit one
-yourself, `git add -f libs/<platform>/lib/` is the deliberate override.
+Only the workflow commits them, with `git add -f`, and only after every one
+has passed its smoke job.
+
+They are listed in `.gitignore`, but do not rely on that: ignore rules do not
+apply to tracked files, so once the workflow has committed them a `git add -A`
+after a local `make lib` will happily commit yours too. That is not
+hypothetical -- it is how a locally-built library for one platform, never
+smoke-tested anywhere, once reached `main` alongside seven stale ones, and
+passed CI because the one job checking committed libraries ran on precisely
+that platform.
+
+The `no-hand-built-libs` job in `ci.yml` is the real guard: it fails any pull
+request that touches `libs/*/lib/`. If you have picked one up by accident,
+`git checkout origin/main -- libs/` puts it back.
 
 ## 2. Tag the platform modules
 

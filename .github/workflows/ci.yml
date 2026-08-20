@@ -60,6 +60,32 @@ jobs:
       - run: CGO_ENABLED=0 go test -count=1 ./...
       - run: go test -race -count=1 ./...
 
+  # The libraries under libs/ are build output. Only the build-libs workflow
+  # commits them, and only after every one has passed its smoke job on real
+  # hardware of that platform. A .gitignore cannot enforce that: ignore rules
+  # do not apply to tracked files, so the moment the workflow commits them a
+  # stray `git add -A` picks them up again -- which is exactly how a
+  # locally-built, never-smoke-tested library reached main once already.
+  no-hand-built-libs:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Refuse hand-committed libraries
+        run: |
+          changed=$(git diff --name-only \
+            "origin/${{ github.base_ref }}...HEAD" -- 'libs/*/lib/iroh_go.lib*')
+          if [ -n "$changed" ]; then
+            echo "::error::these are build output and only build-libs may commit them:"
+            echo "$changed"
+            echo
+            echo "restore them with:  git checkout origin/${{ github.base_ref }} -- libs/"
+            exit 1
+          fi
+          echo "no hand-committed libraries"
+
   # Runs the suite against the libraries checked into libs/, with no Rust
   # toolchain and nothing built fresh -- the pair a consumer actually gets.
   #
@@ -70,7 +96,11 @@ jobs:
   # nothing. This job is what closes it: the loader's ABI check fails here
   # exactly when the two have drifted apart.
   committed-libs:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
