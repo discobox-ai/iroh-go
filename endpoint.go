@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/netip"
 	"runtime"
+	"strings"
 
 	"github.com/discobox-ai/iroh-go/internal/ffi"
 )
@@ -186,6 +187,38 @@ func (e *Endpoint) Addr() (EndpointAddr, error) {
 		return EndpointAddr{}, err
 	}
 	return decodeAddr(text)
+}
+
+// BoundSockets are the local addresses the endpoint's sockets are bound to.
+//
+// This is what the operating system gave us, which is a different question
+// from [Endpoint.Addr]: that one reports where peers should reach this
+// endpoint, and it can still be filling in or be empty on a machine with no
+// usable interface. A caller that has to hand a peer something dialable right
+// now wants both, and a wildcard here (0.0.0.0 or [::]) is a bind address
+// rather than a dial target -- rewrite it to loopback before publishing it.
+func (e *Endpoint) BoundSockets() ([]netip.AddrPort, error) {
+	h, err := e.h.get()
+	if err != nil {
+		return nil, err
+	}
+	text, err := ffi.EndpointBoundSockets(h)
+	if err != nil {
+		return nil, err
+	}
+	if text == "" {
+		return nil, nil
+	}
+	lines := strings.Split(text, "\n")
+	out := make([]netip.AddrPort, 0, len(lines))
+	for _, line := range lines {
+		addr, err := netip.ParseAddrPort(line)
+		if err != nil {
+			return nil, errKind(KindInternal, "unparsable bound socket %q: %v", line, err)
+		}
+		out = append(out, addr)
+	}
+	return out, nil
 }
 
 // Online waits until the endpoint has connected to a relay.

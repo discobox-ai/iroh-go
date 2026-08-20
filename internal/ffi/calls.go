@@ -275,6 +275,18 @@ func EndpointAddr(h uint64) (string, error) {
 	return takeString(ptr, n), nil
 }
 
+func EndpointBoundSockets(h uint64) (string, error) {
+	var (
+		ptr  unsafe.Pointer
+		n    uintptr
+		errh uint64
+	)
+	if c.endpointSockets(h, unsafe.Pointer(&ptr), unsafe.Pointer(&n), unsafe.Pointer(&errh)) != 0 {
+		return "", takeError(errh)
+	}
+	return takeString(ptr, n), nil
+}
+
 func EndpointOnline(ctx context.Context, h uint64) error {
 	return AwaitUnit(ctx, c.endpointOnline(h))
 }

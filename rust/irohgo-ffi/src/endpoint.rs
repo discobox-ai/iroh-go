@@ -244,6 +244,32 @@ pub extern "C" fn iroh_endpoint_addr(
     })
 }
 
+/// The local socket addresses the endpoint is bound to, newline separated.
+///
+/// Distinct from `iroh_endpoint_addr`, which reports where peers should reach
+/// this endpoint: that is discovery's answer and it can be empty or still
+/// filling in, while this is the socket the OS actually gave us. A caller that
+/// has to hand a peer something dialable right now needs both.
+#[no_mangle]
+pub extern "C" fn iroh_endpoint_bound_sockets(
+    handle: u64,
+    out_str: *mut *mut u8,
+    out_len: *mut usize,
+    out_err: *mut u64,
+) -> i32 {
+    ffi_guard!(-1, {
+        let ep = ffi_try!(endpoint(handle), out_err);
+        let text = ep
+            .bound_sockets()
+            .iter()
+            .map(|addr| addr.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        ffi::out_bytes(text.into_bytes(), out_str, out_len);
+        FFI_OK
+    })
+}
+
 /// Waits until the endpoint has connected to a relay.
 ///
 /// Never resolves when relays are disabled or there is no WAN connection, so
