@@ -1,6 +1,7 @@
 package iroh_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -311,5 +312,89 @@ func TestReadDeadlineInterruptsABlockedRead(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("a deadline set in the past did not end the blocked read")
+	}
+}
+
+// A read that completes just as its deadline expires must report its bytes.
+// The completion and the cancellation race inside the FFI, and the loser's
+// result is dropped -- so preferring the cancellation would lose data the
+// stream has already advanced past.
+func TestReadDeadlineRaceLosesNoBytes(t *testing.T) {
+	ctx := testContext(t)
+
+	server := mustBind(t, ctx, localOptions(testALPN))
+	client := mustBind(t, ctx, localOptions())
+
+	serverAddr, err := server.Addr()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := bytes.Repeat([]byte("no byte left behind. "), 20_000)
+	go func() {
+		conn, err := server.Accept(ctx)
+		if err != nil {
+			return
+		}
+		send, _, err := conn.AcceptBi(ctx)
+		if err != nil {
+			return
+		}
+		if _, err := send.Write(payload); err != nil {
+			return
+		}
+		send.Close()
+		<-ctx.Done()
+	}()
+
+	conn, err := client.Connect(ctx, serverAddr, []byte(testALPN))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer conn.Close()
+
+	send, recv, err := conn.OpenBi(ctx)
+	if err != nil {
+		t.Fatalf("open bi: %v", err)
+	}
+	if _, err := send.Write([]byte("go")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	var (
+		got []byte
+		buf = make([]byte, 4096)
+	)
+	for i := 0; len(got) < len(payload); i++ {
+		if ctx.Err() != nil {
+			t.Fatalf("read %d of %d bytes before the test context expired", len(got), len(payload))
+		}
+		if i%4 == 3 {
+			// Every fourth read is unbounded, so the loop always makes
+			// progress however the races land.
+			err = recv.SetReadDeadline(time.Time{})
+		} else {
+			// Deadlines a few hundred microseconds out land near the read's
+			// own completion, which is where the race lives.
+			err = recv.SetReadDeadline(time.Now().Add(time.Duration(i%50) * 10 * time.Microsecond))
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		n, err := recv.Read(buf)
+		got = append(got, buf[:n]...)
+		switch {
+		case err == nil, errors.Is(err, os.ErrDeadlineExceeded):
+		case errors.Is(err, io.EOF):
+			if len(got) != len(payload) {
+				t.Fatalf("stream ended after %d of %d bytes", len(got), len(payload))
+			}
+		default:
+			t.Fatalf("read: %v", err)
+		}
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("read %d bytes, want the %d that were sent, and identical", len(got), len(payload))
 	}
 }

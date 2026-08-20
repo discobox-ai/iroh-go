@@ -93,6 +93,13 @@ func register(op uint64) chan int32 {
 // On cancellation it aborts the operation in Rust and still waits for the
 // completion, because cancel is guaranteed to post exactly one. That drain
 // is what keeps the waiter table from growing.
+//
+// A completion that already succeeded wins the race against the
+// cancellation. An operation that has finished cannot be un-finished: its
+// result exists, Rust drops whatever Go does not take, and a read's bytes are
+// gone from the stream once that happens. Reporting the cancellation instead
+// would silently lose them, so cancelling is "stop if you have not finished",
+// not "discard what you did".
 func await(ctx context.Context, op uint64) (int32, error) {
 	if op == 0 {
 		return 0, NewError(KindInternal, "iroh: operation could not be started")
@@ -103,7 +110,11 @@ func await(ctx context.Context, op uint64) (int32, error) {
 		return status, nil
 	case <-ctx.Done():
 		c.opCancel(op)
-		<-ch
+		// The op stays alive on this path: the caller goes on to take its
+		// result, and frees it there like any other completion.
+		if status := <-ch; status == StatusOK {
+			return status, nil
+		}
 		c.opFree(op)
 		return 0, ctx.Err()
 	}
