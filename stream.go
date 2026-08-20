@@ -80,6 +80,10 @@ func (d *deadline) arm() (context.Context, func()) {
 	}
 }
 
+// pastDeadline is a deadline that has already expired, which is how a call
+// already in flight is told to let go of the stream it is holding.
+var pastDeadline = time.Unix(1, 0)
+
 // deadlineErr maps the context error an expired deadline produces onto the
 // error net.Conn callers expect.
 //
@@ -208,18 +212,21 @@ func (s *SendStream) Reset(ctx context.Context, code uint64) error {
 
 // Close finishes the stream, signalling a clean end to the peer. It does not
 // wait for the peer to acknowledge the data; use [SendStream.Stopped] for
-// that. Close is idempotent.
+// that. Close is idempotent, and safe to call from another goroutine while a
+// write is in flight.
+//
+// It expires the write deadline without being bound by one. A write in flight
+// holds the stream inside the library and the finish would wait behind it,
+// while a Close that skipped the finish because the last write had timed out
+// would leave the peer waiting for data that is never coming.
 func (s *SendStream) Close() error {
 	h := s.h.take()
 	if h == 0 {
 		return nil
 	}
 	defer ffi.SendFree(h)
-	// No retry loop, unlike Write: the handle is spent, so a deadline change
-	// cannot resume this. The stream is finished either way.
-	ctx, release := s.deadline.arm()
-	defer release()
-	return deadlineErr(ffi.SendFinish(ctx, h))
+	s.deadline.set(pastDeadline)
+	return ffi.SendFinish(context.Background(), h)
 }
 
 // RecvStream is the readable half of a QUIC stream. It implements
@@ -304,8 +311,14 @@ func (r *RecvStream) Stop(ctx context.Context, code uint64) error {
 	return ffi.RecvStop(ctx, h, code)
 }
 
-// Close stops the stream with a zero error code. It is idempotent.
+// Close stops the stream with a zero error code. It is idempotent, and safe
+// to call from another goroutine while a read is in flight.
+//
+// Like [SendStream.Close] it expires the deadline first: a read in flight
+// holds the stream inside the library, and a read with no deadline never ends
+// on its own, so stopping it would wait forever behind it.
 func (r *RecvStream) Close() error {
+	r.deadline.set(pastDeadline)
 	return r.Stop(context.Background(), 0)
 }
 

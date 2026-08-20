@@ -81,6 +81,33 @@ Errors carry a `Kind` and match sentinels through `errors.Is`:
 if errors.Is(err, iroh.ErrClosed) { ... }
 ```
 
+### net.Conn and net.Listener
+
+A QUIC stream is an ordered reliable byte stream between two authenticated
+parties, which is what `net.Conn` describes. So `net/http`, gRPC, `crypto/ssh`
+and anything else written against the standard interfaces runs over iroh
+unchanged:
+
+```go
+listener := ep.Listener(iroh.ListenOptions{
+    Authorize: func(c *iroh.Conn) error { ... },  // optional, refuses with a reason
+})
+http.Serve(listener, handler)
+```
+
+```go
+client := &http.Client{Transport: &http.Transport{
+    DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+        return conn.OpenConn(ctx)   // one stream per request
+    },
+}}
+```
+
+`RemoteAddr()` is the peer's endpoint id, already proven by the handshake, so a
+server builds a principal from the connection rather than asking the client who
+it is. `CloseWrite()` half-closes, which is what hijacked HTTP connections and
+`crypto/ssh` need.
+
 ### Not yet covered
 
 The first cut is core networking. Missing, in rough priority order: the
