@@ -3,14 +3,14 @@ module github.com/discobox-ai/iroh-go
 go 1.26.0
 
 require (
-	github.com/discobox-ai/iroh-go/libs/darwin_amd64 v0.1.0
-	github.com/discobox-ai/iroh-go/libs/darwin_arm64 v0.1.0
-	github.com/discobox-ai/iroh-go/libs/linux_amd64 v0.1.0
-	github.com/discobox-ai/iroh-go/libs/linux_amd64_musl v0.1.0
-	github.com/discobox-ai/iroh-go/libs/linux_arm64 v0.1.0
-	github.com/discobox-ai/iroh-go/libs/linux_arm64_musl v0.1.0
-	github.com/discobox-ai/iroh-go/libs/windows_amd64 v0.1.0
-	github.com/discobox-ai/iroh-go/libs/windows_arm64 v0.1.0
+	github.com/discobox-ai/iroh-go/libs/darwin_amd64 v0.2.0
+	github.com/discobox-ai/iroh-go/libs/darwin_arm64 v0.2.0
+	github.com/discobox-ai/iroh-go/libs/linux_amd64 v0.2.0
+	github.com/discobox-ai/iroh-go/libs/linux_amd64_musl v0.2.0
+	github.com/discobox-ai/iroh-go/libs/linux_arm64 v0.2.0
+	github.com/discobox-ai/iroh-go/libs/linux_arm64_musl v0.2.0
+	github.com/discobox-ai/iroh-go/libs/windows_amd64 v0.2.0
+	github.com/discobox-ai/iroh-go/libs/windows_arm64 v0.2.0
 	github.com/ebitengine/purego v0.10.2
 )
 
