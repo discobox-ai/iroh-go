@@ -24,10 +24,17 @@ Nothing there? Go straight to step 3 and tag the root module alone. A
 repository where the root is at `v0.4.0` and every libs module is still at
 `v0.1.0` is the normal steady state, not a mistake.
 
-The release profile builds reproducibly, so re-running the workflow when
-nothing changed is harmless -- the binaries come out byte-identical and the
-commit job reports "libraries unchanged" and pushes nothing. It just wastes
-runner time.
+Re-running the workflow when nothing changed should be harmless: the binaries
+come out byte-identical, and the commit job reports "libraries unchanged" and
+pushes nothing. It only wastes runner time.
+
+That took work to be true of Windows. Linux and macOS are reproducible as
+built, but MSVC stamps the link time into the PE header, so those two
+libraries differed on every rebuild -- 24 bytes in 13.9MB -- and committed
+~25MB each time to record it. `build-lib.sh` passes `/Brepro` for the MSVC
+targets, which derives the stamp from the content instead. The way to confirm
+it still holds is to dispatch the workflow twice with nothing changed in
+between and check the second run commits nothing.
 
 ## 1. Build and commit the native libraries
 

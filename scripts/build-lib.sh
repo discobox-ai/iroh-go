@@ -55,9 +55,16 @@ if [ -n "$target" ] && command -v rustup >/dev/null 2>&1; then
 	rustup target add "${target%%.*}" >/dev/null
 fi
 
-# A cdylib for a musl target is only shared if crt-static is switched off.
 case "$target" in
+# A cdylib for a musl target is only shared if crt-static is switched off.
 *-musl) export RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=-crt-static" ;;
+# MSVC stamps the link time into the PE header and a signature into the debug
+# directory, so relinking identical source yields a different file -- measured
+# at 24 bytes in 13.9MB, TimeDateStamp among them. Every rebuild then looked
+# like a change and committed ~25MB to record nothing. /Brepro derives both
+# from a hash of the content instead, which is what the other six platforms
+# get for free.
+*-windows-msvc) export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=/Brepro" ;;
 esac
 
 echo "building iroh cdylib for $platform${target:+ ($target)}"
