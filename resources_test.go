@@ -7,7 +7,9 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -400,4 +402,51 @@ func TestReadDeadlineRaceLosesNoBytes(t *testing.T) {
 	if !bytes.Equal(got, payload) {
 		t.Fatalf("read %d bytes, want the %d that were sent, and identical", len(got), len(payload))
 	}
+}
+
+// TestIrohVersionMatchesTheLockfile keeps the reported upstream version tied
+// to what Cargo actually resolved. The libs modules are versioned on iroh's
+// major and minor, so a silent drift here would misrepresent every tag.
+func TestIrohVersionMatchesTheLockfile(t *testing.T) {
+	got, err := iroh.IrohVersion()
+	if err != nil {
+		t.Fatalf("iroh version: %v", err)
+	}
+
+	lock, err := os.ReadFile(filepath.Join("rust", "Cargo.lock"))
+	if err != nil {
+		t.Skipf("no lockfile to compare against: %v", err)
+	}
+	want := lockedVersion(string(lock), "iroh")
+	if want == "" {
+		t.Fatal(`no [[package]] named "iroh" in rust/Cargo.lock`)
+	}
+	if got != want {
+		t.Errorf("library reports iroh %s, lockfile says %s", got, want)
+	}
+
+	// The libs module tags track iroh's major and minor, so those two are the
+	// digits a release encodes.
+	if major, minor, ok := strings.Cut(want, "."); ok {
+		t.Logf("iroh %s -> libs modules are tagged v%s.%s.x", want, major, strings.SplitN(minor, ".", 2)[0])
+	}
+}
+
+// lockedVersion finds the version of a package in a Cargo.lock.
+func lockedVersion(lock, want string) string {
+	var inPackage, isMatch bool
+	for _, line := range strings.Split(lock, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "[[package]]":
+			inPackage, isMatch = true, false
+		case strings.HasPrefix(line, "["):
+			inPackage = false
+		case inPackage && strings.HasPrefix(line, "name = "):
+			isMatch = strings.Trim(strings.TrimPrefix(line, "name = "), `"`) == want
+		case inPackage && isMatch && strings.HasPrefix(line, "version = "):
+			return strings.Trim(strings.TrimPrefix(line, "version = "), `"`)
+		}
+	}
+	return ""
 }

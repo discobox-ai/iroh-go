@@ -23,6 +23,20 @@ func SetLogLevel(level int32) error {
 	return nil
 }
 
+// IrohVersion reports the version of the iroh crate the library was built
+// against.
+func IrohVersion() (string, error) {
+	if err := Load(); err != nil {
+		return "", err
+	}
+	var (
+		ptr unsafe.Pointer
+		n   uintptr
+	)
+	c.irohVersion(unsafe.Pointer(&ptr), unsafe.Pointer(&n))
+	return takeString(ptr, n), nil
+}
+
 // HandleCount reports the number of live objects inside the library.
 func HandleCount() (uint64, error) {
 	if err := Load(); err != nil {

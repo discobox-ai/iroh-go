@@ -39,11 +39,24 @@ use ops::{OpValue, Wait};
 /// Bumped whenever the ABI changes shape. The Go loader refuses a library
 /// whose version it does not recognise, which turns a mismatched
 /// library/bindings pair into a clear error instead of a crash.
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 
 #[no_mangle]
 pub extern "C" fn iroh_abi_version() -> u32 {
     ABI_VERSION
+}
+
+/// The version of the iroh crate this library was built against.
+///
+/// Baked in from the lockfile at build time, so it reports what is actually
+/// compiled in rather than what anyone remembered to write down. The Go side
+/// exposes it as `iroh.IrohVersion`, and asserts it against the lockfile in a
+/// test.
+#[no_mangle]
+pub extern "C" fn iroh_version(out_str: *mut *mut u8, out_len: *mut usize) {
+    ffi_guard!((), {
+        ffi::out_bytes(env!("IROH_VERSION").as_bytes().to_vec(), out_str, out_len);
+    })
 }
 
 /// Starts the tokio runtime. Idempotent, and optional -- every other entry

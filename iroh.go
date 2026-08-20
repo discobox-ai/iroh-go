@@ -63,6 +63,14 @@ func SetLogLevel(level LogLevel) error {
 	return ffi.SetLogLevel(int32(level))
 }
 
+// IrohVersion returns the version of the iroh crate the loaded native library
+// was built against, for example "1.0.3".
+//
+// The libs modules are versioned on iroh's major and minor, with the patch
+// reserved for changes to these bindings, so this is the way to learn the
+// exact upstream version in a given build.
+func IrohVersion() (string, error) { return ffi.IrohVersion() }
+
 // LibraryPath returns the path of the loaded native library. Useful when
 // diagnosing which build is actually in use.
 func LibraryPath() (string, error) { return lib.Path() }

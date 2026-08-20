@@ -68,12 +68,39 @@ yourself, `git add -f libs/<platform>/lib/` is the deliberate override.
 
 ## 2. Tag the platform modules
 
-Each `libs/<platform>` module is tagged with its directory as the prefix:
+The libs modules carry compiled Rust, so their versions track **iroh's major
+and minor**, with the patch reserved for changes to the shim in
+`rust/irohgo-ffi`:
+
+| iroh    | libs tag             |
+| ------- | -------------------- |
+| 1.0.3   | `v1.0.0`             |
+| 1.0.3   | `v1.0.1` (shim fix)  |
+| 1.0.4   | `v1.0.2` (shim same, upstream patch) |
+| 1.1.0   | `v1.1.0`             |
+| 2.0.0   | `v2.0.0`, and the module paths gain a `/v2` suffix |
+
+The patch digit is ours because a libs module is iroh *plus* our shim, and the
+shim changes on its own schedule -- it has already needed a correctness fix
+while iroh stood still. Tying the patch to upstream would leave two different
+libraries both claiming to be "1.0.3", one of them with a bug.
+
+iroh's own patch digit is therefore not in the tag. It is not lost: the exact
+locked version is baked into the library at build time and reported by
+`iroh.IrohVersion()`, and `TestIrohVersionMatchesTheLockfile` asserts it
+against `rust/Cargo.lock` so it cannot drift.
+
+**The root module versions separately**, on its own Go API, and stays at `v0.x`
+until that API settles. A repository where `libs/linux_amd64` is at `v1.0.0`
+and the root is at `v0.2.0` is correct: they promise different things.
+
+Tag each libs module with its directory as the prefix:
 
 ```
+V=v1.0.0
 for p in linux_amd64 linux_amd64_musl linux_arm64 linux_arm64_musl \
          darwin_amd64 darwin_arm64 windows_amd64 windows_arm64; do
-  git tag "libs/$p/v0.1.0"
+  git tag "libs/$p/$V"
 done
 git push --tags
 ```
@@ -83,15 +110,16 @@ git push --tags
 Drop the `replace` block and set the real versions:
 
 ```
+V=v1.0.0
 for p in linux_amd64 linux_amd64_musl linux_arm64 linux_arm64_musl \
          darwin_amd64 darwin_arm64 windows_amd64 windows_arm64; do
   go mod edit -dropreplace "github.com/discobox-ai/iroh-go/libs/$p"
-  go mod edit -require "github.com/discobox-ai/iroh-go/libs/$p@v0.1.0"
+  go mod edit -require "github.com/discobox-ai/iroh-go/libs/$p@$V"
 done
 go mod tidy
 ```
 
-Verify against the published modules, with the workspace out of the way:
+Verify against the published modules:
 
 ```
 CGO_ENABLED=0 go build ./...
@@ -99,10 +127,11 @@ CGO_ENABLED=0 go test ./...
 make cross
 ```
 
-Commit, then tag the root module:
+Commit, then tag the root module on its own line -- `v0.2.0`, not the libs
+version:
 
 ```
-git tag v0.1.0
+git tag v0.2.0
 git push --tags
 ```
 
@@ -114,7 +143,8 @@ keep building against their locally built libraries.
 ## Bumping iroh
 
 Change the version in `rust/irohgo-ffi/Cargo.toml`, run `cargo update -p iroh`,
-and check whether anything in `rust/irohgo-ffi/src/` needs adjusting. If the C
+and check whether anything in `rust/irohgo-ffi/src/` needs adjusting. If iroh's
+major or minor moved, the next libs tag follows it -- see the table above. If the C
 ABI changes shape at all — a signature, a constant, an error kind's number —
 bump `ABI_VERSION` in `rust/irohgo-ffi/src/lib.rs` *and* `ABIVersion` in
 `internal/ffi/ffi.go`. The loader compares them, so a mismatched pair reports a

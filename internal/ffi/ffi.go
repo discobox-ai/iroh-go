@@ -20,7 +20,7 @@ import (
 // ABIVersion must match iroh_abi_version() in the loaded library. Bumped
 // whenever the ABI changes shape, so a mismatched pair of bindings and
 // library is a clear error rather than a crash.
-const ABIVersion = 1
+const ABIVersion = 2
 
 // Completion statuses, matching error.rs.
 const (
@@ -70,6 +70,7 @@ const NoStopCode = ^uint64(0)
 
 type api struct {
 	abiVersion  func() uint32
+	irohVersion func(outStr, outLen unsafe.Pointer)
 	initRuntime func() int32
 	setLogLevel func(level int32) int32
 	freeBytes   func(ptr unsafe.Pointer, length uintptr)
@@ -189,6 +190,7 @@ func load() (err error) {
 func symbols() map[string]any {
 	return map[string]any{
 		"iroh_abi_version":         &c.abiVersion,
+		"iroh_version":             &c.irohVersion,
 		"iroh_init":                &c.initRuntime,
 		"iroh_set_log_level":       &c.setLogLevel,
 		"iroh_free_bytes":          &c.freeBytes,
