@@ -20,7 +20,7 @@ import (
 // ABIVersion must match iroh_abi_version() in the loaded library. Bumped
 // whenever the ABI changes shape, so a mismatched pair of bindings and
 // library is a clear error rather than a crash.
-const ABIVersion = 2
+const ABIVersion = 3
 
 // Completion statuses, matching error.rs.
 const (
@@ -110,6 +110,7 @@ type api struct {
 	endpointBind      func(options uint64) uint64
 	endpointID        func(h uint64, outID, outErr unsafe.Pointer) int32
 	endpointAddr      func(h uint64, outStr, outLen, outErr unsafe.Pointer) int32
+	endpointSockets   func(h uint64, outStr, outLen, outErr unsafe.Pointer) int32
 	endpointOnline    func(h uint64) uint64
 	endpointHomeRelay func(h uint64, outStr, outLen, outErr unsafe.Pointer) int32
 	endpointConnect   func(h uint64, addr unsafe.Pointer, addrLen uintptr, alpn unsafe.Pointer, alpnLen uintptr) uint64
@@ -225,6 +226,7 @@ func symbols() map[string]any {
 		"iroh_endpoint_bind":          &c.endpointBind,
 		"iroh_endpoint_id":            &c.endpointID,
 		"iroh_endpoint_addr":          &c.endpointAddr,
+		"iroh_endpoint_bound_sockets": &c.endpointSockets,
 		"iroh_endpoint_online":        &c.endpointOnline,
 		"iroh_endpoint_home_relay":    &c.endpointHomeRelay,
 		"iroh_endpoint_connect":       &c.endpointConnect,

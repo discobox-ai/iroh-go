@@ -339,3 +339,26 @@ func TestClosedEndpointReportsErrClosed(t *testing.T) {
 		t.Fatalf("want ErrClosed, got %v", err)
 	}
 }
+
+func TestBoundSockets(t *testing.T) {
+	ctx := testContext(t)
+	ep := mustBind(t, ctx, localOptions())
+
+	sockets, err := ep.BoundSockets()
+	if err != nil {
+		t.Fatalf("bound sockets: %v", err)
+	}
+	if len(sockets) == 0 {
+		t.Fatal("no bound sockets after a successful bind")
+	}
+	for _, socket := range sockets {
+		// localOptions binds loopback with a zero port, so this is the
+		// address the OS chose -- the thing Addr cannot tell you.
+		if !socket.Addr().IsLoopback() {
+			t.Errorf("bound socket %v is not the loopback address asked for", socket)
+		}
+		if socket.Port() == 0 {
+			t.Errorf("bound socket %v has no port", socket)
+		}
+	}
+}

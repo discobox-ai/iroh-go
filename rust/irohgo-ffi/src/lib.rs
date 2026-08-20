@@ -39,7 +39,7 @@ use ops::{OpValue, Wait};
 /// Bumped whenever the ABI changes shape. The Go loader refuses a library
 /// whose version it does not recognise, which turns a mismatched
 /// library/bindings pair into a clear error instead of a crash.
-pub const ABI_VERSION: u32 = 2;
+pub const ABI_VERSION: u32 = 3;
 
 #[no_mangle]
 pub extern "C" fn iroh_abi_version() -> u32 {
