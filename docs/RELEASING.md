@@ -8,6 +8,27 @@ native library.
 For day-to-day development the root `go.mod` points at the local directories
 with `replace` directives. A release swaps those for published versions.
 
+## 0. Do the libraries need rebuilding at all?
+
+Usually not. A libs module is a `go.mod`, a `lib.go` that never changes, and
+the compiled library -- so its content moves only when something under `rust/`
+does. A release that touches only Go code reuses the libs tags already
+published, and steps 1 and 2 are skipped entirely: the root `go.mod` keeps
+requiring the versions it already requires.
+
+```
+git diff --stat <last libs tag>..HEAD -- rust/
+```
+
+Nothing there? Go straight to step 3 and tag the root module alone. A
+repository where the root is at `v0.4.0` and every libs module is still at
+`v0.1.0` is the normal steady state, not a mistake.
+
+The release profile builds reproducibly, so re-running the workflow when
+nothing changed is harmless -- the binaries come out byte-identical and the
+commit job reports "libraries unchanged" and pushes nothing. It just wastes
+runner time.
+
 ## 1. Build and commit the native libraries
 
 Run the **build-libs** workflow (Actions → build-libs → Run workflow). It is
@@ -70,6 +91,8 @@ yourself, `git add -f libs/<platform>/lib/` is the deliberate override.
 
 ## 2. Tag the platform modules
 
+*Only when step 0 said the Rust changed.*
+
 **Today everything is `v0.x`, and the root and libs modules move together.**
 Both are pre-1.0: the Go API is still growing (no `Incoming`/0-RTT, watchers or
 `ServicesClient` yet), and a `v1` on the libs would commit their import paths
@@ -106,7 +129,11 @@ done
 git push --tags
 ```
 
-## 3. Point the root module at the published versions
+## 3. Tag the root module
+
+If the libs were re-tagged in step 2, point the root at the new versions
+first; otherwise leave the requirements alone -- they already name the libs
+versions still in use.
 
 The root `go.mod` keeps its `replace` directives -- Go applies them only when
 this repo is the main module, so contributors build against the libraries they
