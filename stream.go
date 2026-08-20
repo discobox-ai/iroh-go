@@ -2,7 +2,9 @@ package iroh
 
 import (
 	"context"
+	"errors"
 	"io"
+	"os"
 	"runtime"
 	"sync"
 	"time"
@@ -13,27 +15,82 @@ import (
 // deadline holds an optional per-stream deadline, so that the io.Reader and
 // io.Writer methods -- which take no context -- can still be bounded, the
 // same way net.Conn does it.
+//
+// net.Conn requires a deadline to reach a call that is *already* blocked, not
+// merely bound the next one: net/http aborts a hijacked connection's pending
+// background read by setting a deadline in the past and waiting for that read
+// to return. So every call registers the context it is using, and [set]
+// cancels the registered ones. The caller sees context.Canceled, derives a
+// fresh context from the new deadline, and carries on -- or stops immediately,
+// because the new deadline has already passed.
 type deadline struct {
 	mu sync.Mutex
 	t  time.Time
+	// armed holds the contexts of the calls currently in flight. A stream has
+	// at most one read and one write outstanding, plus a concurrent Close, so
+	// this stays tiny.
+	armed map[uint64]context.CancelFunc
+	next  uint64
 }
 
 func (d *deadline) set(t time.Time) {
 	d.mu.Lock()
 	d.t = t
+	armed := make([]context.CancelFunc, 0, len(d.armed))
+	for _, cancel := range d.armed {
+		armed = append(armed, cancel)
+	}
 	d.mu.Unlock()
+
+	// Outside the lock: cancelling wakes a call that will re-arm.
+	for _, cancel := range armed {
+		cancel()
+	}
 }
 
-// context derives a context honouring the deadline. The returned cancel func
+// arm derives a context honouring the current deadline and registers it, so
+// that a later [set] interrupts the call using it. The returned release func
 // must always be called.
-func (d *deadline) context() (context.Context, context.CancelFunc) {
+func (d *deadline) arm() (context.Context, func()) {
 	d.mu.Lock()
-	t := d.t
-	d.mu.Unlock()
-	if t.IsZero() {
-		return context.Background(), func() {}
+	defer d.mu.Unlock()
+
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
+	if d.t.IsZero() {
+		ctx, cancel = context.WithCancel(context.Background())
+	} else {
+		ctx, cancel = context.WithDeadline(context.Background(), d.t)
 	}
-	return context.WithDeadline(context.Background(), t)
+
+	id := d.next
+	d.next++
+	if d.armed == nil {
+		d.armed = make(map[uint64]context.CancelFunc)
+	}
+	d.armed[id] = cancel
+
+	return ctx, func() {
+		d.mu.Lock()
+		delete(d.armed, id)
+		d.mu.Unlock()
+		cancel()
+	}
+}
+
+// deadlineErr maps the context error an expired deadline produces onto the
+// error net.Conn callers expect.
+//
+// os.ErrDeadlineExceeded is returned bare rather than wrapped: net/http and
+// most other callers recognise a timeout with a net.Error type assertion,
+// which a wrapped error defeats.
+func deadlineErr(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return os.ErrDeadlineExceeded
+	}
+	return err
 }
 
 // SendStream is the writable half of a QUIC stream. It implements
@@ -54,18 +111,34 @@ func newSendStream(h uint64) *SendStream {
 }
 
 // Write writes all of p, honouring any deadline set with
-// [SendStream.SetWriteDeadline].
+// [SendStream.SetWriteDeadline]. A deadline that passes -- including one set
+// while this call is already blocked -- ends it with [os.ErrDeadlineExceeded],
+// reporting how much of p was written.
 func (s *SendStream) Write(p []byte) (int, error) {
-	ctx, cancel := s.deadline.context()
-	defer cancel()
-	return s.WriteContext(ctx, p)
+	written := 0
+	for {
+		ctx, release := s.deadline.arm()
+		n, err := s.WriteContext(ctx, p[written:])
+		release()
+		written += n
+		if err == nil {
+			return written, nil
+		}
+		// context.Canceled here means the deadline changed rather than
+		// expired, so resume under the new one from where this left off.
+		if errors.Is(err, context.Canceled) && written < len(p) {
+			continue
+		}
+		return written, deadlineErr(err)
+	}
 }
 
 // WriteContext writes all of p unless ctx is cancelled first, in which case
 // it reports how much did make it.
 //
-// A cancelled write leaves the stream at a known position: the underlying
-// operation consumes nothing unless it completes, so the returned count is
+// A cancelled write leaves the stream at a known position: an operation that
+// completes reports what it wrote even when the cancellation raced it, and one
+// that does not complete writes nothing. Either way the returned count is
 // exact and writing may simply resume.
 func (s *SendStream) WriteContext(ctx context.Context, p []byte) (int, error) {
 	h, err := s.h.get()
@@ -89,7 +162,8 @@ func (s *SendStream) WriteContext(ctx context.Context, p []byte) (int, error) {
 	return written, nil
 }
 
-// SetWriteDeadline bounds subsequent Write calls. A zero time clears it.
+// SetWriteDeadline bounds Write calls, including one already in flight. A
+// zero time clears it.
 func (s *SendStream) SetWriteDeadline(t time.Time) error {
 	s.deadline.set(t)
 	return nil
@@ -141,9 +215,11 @@ func (s *SendStream) Close() error {
 		return nil
 	}
 	defer ffi.SendFree(h)
-	ctx, cancel := s.deadline.context()
-	defer cancel()
-	return ffi.SendFinish(ctx, h)
+	// No retry loop, unlike Write: the handle is spent, so a deadline change
+	// cannot resume this. The stream is finished either way.
+	ctx, release := s.deadline.arm()
+	defer release()
+	return deadlineErr(ffi.SendFinish(ctx, h))
 }
 
 // RecvStream is the readable half of a QUIC stream. It implements
@@ -163,17 +239,32 @@ func newRecvStream(h uint64) *RecvStream {
 
 // Read reads into p, honouring any deadline set with
 // [RecvStream.SetReadDeadline]. It returns [io.EOF] at the clean end of the
-// stream.
+// stream. A deadline that passes -- including one set while this call is
+// already blocked -- ends it with [os.ErrDeadlineExceeded], having consumed
+// nothing.
 func (r *RecvStream) Read(p []byte) (int, error) {
-	ctx, cancel := r.deadline.context()
-	defer cancel()
-	return r.ReadContext(ctx, p)
+	for {
+		ctx, release := r.deadline.arm()
+		n, err := r.ReadContext(ctx, p)
+		release()
+		if n > 0 || err == nil {
+			return n, err
+		}
+		// context.Canceled here means the deadline changed rather than
+		// expired, and a cancelled read consumed nothing, so read again under
+		// the new deadline.
+		if errors.Is(err, context.Canceled) {
+			continue
+		}
+		return 0, deadlineErr(err)
+	}
 }
 
 // ReadContext reads into p unless ctx is cancelled first.
 //
 // A cancelled read consumes nothing, so the stream position is unchanged and
-// reading may simply resume.
+// reading may simply resume. A read that completes just as the cancellation
+// arrives reports its bytes rather than losing them.
 func (r *RecvStream) ReadContext(ctx context.Context, p []byte) (int, error) {
 	h, err := r.h.get()
 	if err != nil {
@@ -195,7 +286,8 @@ func (r *RecvStream) ReadContext(ctx context.Context, p []byte) (int, error) {
 	return n, nil
 }
 
-// SetReadDeadline bounds subsequent Read calls. A zero time clears it.
+// SetReadDeadline bounds Read calls, including one already in flight. A zero
+// time clears it.
 func (r *RecvStream) SetReadDeadline(t time.Time) error {
 	r.deadline.set(t)
 	return nil
