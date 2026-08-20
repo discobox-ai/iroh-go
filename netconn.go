@@ -243,8 +243,17 @@ func (l *Listener) accept() {
 	for {
 		conn, err := l.endpoint.Accept(l.ctx)
 		if err != nil {
-			l.fail(err)
-			return
+			// Only a closed endpoint or a closed listener ends the loop.
+			// Every other failure belongs to one peer -- an alpn this
+			// endpoint does not serve, a peer that vanished mid-handshake --
+			// and taking the listener down with it would let any client end
+			// service for all of them. net.TCPListener does not behave that
+			// way and neither does this.
+			if l.ctx.Err() != nil || errors.Is(err, ErrClosed) {
+				l.fail(err)
+				return
+			}
+			continue
 		}
 		go l.serve(conn)
 	}

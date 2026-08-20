@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -242,5 +243,130 @@ func TestListenerAcceptReportsClosed(t *testing.T) {
 	// Closing the listener must not close the endpoint under it.
 	if _, err := ep.Addr(); err != nil {
 		t.Fatalf("endpoint unusable after its listener closed: %v", err)
+	}
+}
+
+// A listener must survive a peer that fails its handshake. One client
+// arriving with the wrong ALPN, or vanishing mid-handshake, must not take the
+// server down for everyone else -- net.TCPListener does not behave that way
+// and neither should this.
+func TestListenerSurvivesAFailedHandshake(t *testing.T) {
+	ctx := testContext(t)
+	server := mustBind(t, ctx, localOptions(testALPN))
+	addr, err := server.Addr()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	l := server.Listener(iroh.ListenOptions{})
+	defer l.Close()
+
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() { io.Copy(c, c); c.Close() }()
+		}
+	}()
+
+	// A peer with an ALPN this endpoint does not serve: its handshake fails.
+	bad := mustBind(t, ctx, localOptions())
+	badCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if _, err := bad.Connect(badCtx, addr, []byte("not/served/1")); err == nil {
+		t.Fatal("connecting with an unserved alpn unexpectedly succeeded")
+	}
+
+	// The listener must still serve a good peer.
+	good := mustBind(t, ctx, localOptions())
+	conn, err := good.Connect(ctx, addr, []byte(testALPN))
+	if err != nil {
+		t.Fatalf("connect after a failed handshake: %v", err)
+	}
+	defer conn.Close()
+
+	sc, err := conn.OpenConn(ctx)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer sc.Close()
+	sc.SetDeadline(time.Now().Add(5 * time.Second))
+
+	if _, err := sc.Write([]byte("still alive")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	sc.CloseWrite()
+	got, err := io.ReadAll(sc)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(got) != "still alive" {
+		t.Fatalf("echo: got %q", got)
+	}
+	var _ net.Conn = sc
+}
+
+// A server that opens and closes listeners over its lifetime must not
+// accumulate goroutines: each listener runs an accept loop plus one goroutine
+// per connected peer.
+func TestListenerCloseReclaimsGoroutines(t *testing.T) {
+	ctx := testContext(t)
+	server := mustBind(t, ctx, localOptions(testALPN))
+	client := mustBind(t, ctx, localOptions())
+	addr, err := server.Addr()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	settle := func() int {
+		for i := 0; i < 100; i++ {
+			runtime.GC()
+			time.Sleep(20 * time.Millisecond)
+			n := runtime.NumGoroutine()
+			runtime.GC()
+			time.Sleep(20 * time.Millisecond)
+			if runtime.NumGoroutine() == n {
+				return n
+			}
+		}
+		return runtime.NumGoroutine()
+	}
+
+	base := settle()
+	for i := 0; i < 10; i++ {
+		l := server.Listener(iroh.ListenOptions{})
+		go func() {
+			for {
+				c, err := l.Accept()
+				if err != nil {
+					return
+				}
+				go func() { io.Copy(c, c); c.Close() }()
+			}
+		}()
+		conn, err := client.Connect(ctx, addr, []byte(testALPN))
+		if err != nil {
+			t.Fatalf("round %d: connect: %v", i, err)
+		}
+		sc, err := conn.OpenConn(ctx)
+		if err != nil {
+			t.Fatalf("round %d: open: %v", i, err)
+		}
+		sc.Write([]byte("hi"))
+		sc.CloseWrite()
+		io.ReadAll(sc)
+		sc.Close()
+		conn.Close()
+		if err := l.Close(); err != nil {
+			t.Fatalf("round %d: close listener: %v", i, err)
+		}
+	}
+	after := settle()
+	if after > base+5 {
+		t.Errorf("goroutines grew from %d to %d across 10 listener lifecycles", base, after)
+	} else {
+		t.Logf("goroutines %d -> %d across 10 listener lifecycles", base, after)
 	}
 }
