@@ -60,6 +60,24 @@ jobs:
       - run: CGO_ENABLED=0 go test -count=1 ./...
       - run: go test -race -count=1 ./...
 
+  # Runs the suite against the libraries checked into libs/, with no Rust
+  # toolchain and nothing built fresh -- the pair a consumer actually gets.
+  #
+  # The `go` job above builds the library from the current source, so it always
+  # tests a matching pair and stays green even when the committed libraries are
+  # stale. That is the window between merging a change under rust/ and running
+  # build-libs, and during it `go get` is broken for everyone while CI says
+  # nothing. This job is what closes it: the loader's ABI check fails here
+  # exactly when the two have drifted apart.
+  committed-libs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - run: CGO_ENABLED=0 go test -count=1 ./...
+
   # The point of the whole exercise: every target still builds with no C
   # compiler and no cgo.
   cross:

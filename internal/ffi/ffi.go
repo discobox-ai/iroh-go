@@ -173,13 +173,23 @@ func load() (err error) {
 		}
 	}()
 
+	// Check the ABI before binding anything else. A library older than these
+	// bindings is missing whichever symbols were added since, and naming one
+	// of them says nothing useful -- symbols() is a map, so which one gets
+	// named is not even stable between runs. The version says exactly what is
+	// wrong and what to do about it.
+	purego.RegisterLibFunc(&c.abiVersion, handle, "iroh_abi_version")
+	if got := c.abiVersion(); got != ABIVersion {
+		return fmt.Errorf(
+			"iroh: library at ABI version %d, these bindings need %d; "+
+				"the native library is out of step with the Go code (run `make lib`, or update the libs/* modules)",
+			got, ABIVersion)
+	}
+
 	for name, fptr := range symbols() {
 		purego.RegisterLibFunc(fptr, handle, name)
 	}
 
-	if got := c.abiVersion(); got != ABIVersion {
-		return fmt.Errorf("iroh: library ABI version %d, these bindings need %d", got, ABIVersion)
-	}
 	if c.initRuntime() != 0 {
 		return fmt.Errorf("iroh: library failed to start its runtime")
 	}
