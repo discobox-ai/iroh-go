@@ -105,10 +105,14 @@ type SendStream struct {
 	h        handle
 	writeMu  sync.Mutex
 	deadline deadline
+	// conn is held for the reason [Conn] holds its endpoint: a caller with a
+	// stream and nothing else -- which is all net.Conn is -- must not have
+	// the connection underneath it collected.
+	conn *Conn
 }
 
-func newSendStream(h uint64) *SendStream {
-	s := &SendStream{}
+func newSendStream(h uint64, conn *Conn) *SendStream {
+	s := &SendStream{conn: conn}
 	s.h.set(h)
 	runtime.AddCleanup(s, ffi.SendFree, h)
 	return s
@@ -240,10 +244,12 @@ type RecvStream struct {
 	h        handle
 	readMu   sync.Mutex
 	deadline deadline
+	// conn is held for the same reason it is on [SendStream].
+	conn *Conn
 }
 
-func newRecvStream(h uint64) *RecvStream {
-	r := &RecvStream{}
+func newRecvStream(h uint64, conn *Conn) *RecvStream {
+	r := &RecvStream{conn: conn}
 	r.h.set(h)
 	runtime.AddCleanup(r, ffi.RecvFree, h)
 	return r

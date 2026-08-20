@@ -1,6 +1,6 @@
 module github.com/discobox-ai/iroh-go
 
-go 1.24
+go 1.26.0
 
 require (
 	github.com/discobox-ai/iroh-go/libs/darwin_amd64 v0.0.0

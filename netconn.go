@@ -96,7 +96,7 @@ func (c *Conn) streamConn(send *SendStream, recv *RecvStream) (*StreamConn, erro
 	return &StreamConn{
 		send:   send,
 		recv:   recv,
-		local:  c.local,
+		local:  c.endpoint.ID(),
 		remote: remote,
 		closed: make(chan struct{}),
 	}, nil

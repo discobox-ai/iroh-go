@@ -264,7 +264,7 @@ func (e *Endpoint) Connect(ctx context.Context, addr EndpointAddr, alpn []byte) 
 	if err != nil {
 		return nil, err
 	}
-	return newConn(c, e.id), nil
+	return newConn(c, e), nil
 }
 
 // ConnectTicket dials the endpoint a ticket points at.
@@ -291,7 +291,7 @@ func (e *Endpoint) Accept(ctx context.Context) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newConn(c, e.id), nil
+	return newConn(c, e), nil
 }
 
 // Close shuts the endpoint down, closing its connections. It is idempotent.
