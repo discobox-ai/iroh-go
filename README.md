@@ -71,6 +71,7 @@ Concepts and names follow iroh; the shapes follow Go.
 | `endpoint.connect`          | `ep.Connect(ctx, addr, alpn)`                   |
 | `endpoint.accept`           | `ep.Accept(ctx)` — returns a handshaken `*Conn` |
 | `connection.open_bi`        | `conn.OpenBi(ctx)`                              |
+| `connection.paths`          | `conn.Paths()` — direct or relayed, and where    |
 | `send_stream.write_all`     | `send.Write(p)` — `io.Writer`                   |
 | `recv_stream.read_to_end`   | `io.ReadAll(recv)` — `io.Reader`, `io.EOF`      |
 | `send_stream.finish`        | `send.Close()`                                  |
@@ -118,7 +119,8 @@ it is. `CloseWrite()` half-closes, which is what hijacked HTTP connections and
 
 The first cut is core networking. Missing, in rough priority order: the
 `Incoming`/`Connecting` split and 0-RTT (`Accept` hands back an already
-handshaken connection); watchers for address, home-relay and path changes;
+handshaken connection); watchers for address, home-relay and path changes
+(`conn.Paths` is a snapshot);
 `ServicesClient` (ping, metrics, diagnostics); and protocol handlers driven
 from Rust. Nothing in the design blocks them.
 

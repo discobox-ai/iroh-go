@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use iroh::endpoint::{Connection, ConnectionError, VarInt};
+use iroh::TransportAddr;
 
 use crate::error::{ErrKind, Error, Result};
 use crate::ffi::{self, ffi_guard, ffi_try, FFI_OK};
@@ -201,6 +202,53 @@ pub extern "C" fn iroh_conn_stats(
             stats.lost_bytes,
         ];
         unsafe { std::ptr::copy_nonoverlapping(values.as_ptr(), out, STATS_LEN) };
+        FFI_OK
+    })
+}
+
+/// Returns the connection's open network paths, one per line.
+///
+/// Each line is `kind\tselected\trtt_micros\tremote`: kind is `ip`, `relay`
+/// or `custom`; selected is `1` for the path carrying application data and `0`
+/// for the rest; rtt_micros is iroh's round-trip estimate for that path. The
+/// address comes last because it is the one field whose text this crate does
+/// not choose -- a custom transport's `Display` is the transport's -- so a
+/// separator inside it cannot shift the fields after it.
+///
+/// This is a snapshot, and the answer moves: a connection opens on a relay and
+/// switches to a direct path once hole punching succeeds. A caller reporting
+/// how traffic actually flows should ask after the connection has carried a
+/// round trip rather than the moment it is established.
+#[no_mangle]
+pub extern "C" fn iroh_conn_paths(
+    handle: u64,
+    out_str: *mut *mut u8,
+    out_len: *mut usize,
+    out_err: *mut u64,
+) -> i32 {
+    ffi_guard!(-1, {
+        let conn = ffi_try!(conn(handle), out_err);
+        let paths = conn.paths();
+        let text = paths
+            .iter()
+            .map(|path| {
+                // The payload rather than the address itself: TransportAddr's
+                // Display prefixes the variant, and the kind is already its
+                // own field here.
+                let (kind, remote) = match path.remote_addr() {
+                    TransportAddr::Ip(addr) => ("ip", addr.to_string()),
+                    TransportAddr::Relay(url) => ("relay", url.to_string()),
+                    other => ("custom", other.to_string()),
+                };
+                format!(
+                    "{kind}\t{}\t{}\t{remote}",
+                    u8::from(path.is_selected()),
+                    path.rtt().as_micros(),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        ffi::out_bytes(text.into_bytes(), out_str, out_len);
         FFI_OK
     })
 }

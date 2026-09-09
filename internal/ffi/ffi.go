@@ -20,7 +20,7 @@ import (
 // ABIVersion must match iroh_abi_version() in the loaded library. Bumped
 // whenever the ABI changes shape, so a mismatched pair of bindings and
 // library is a clear error rather than a crash.
-const ABIVersion = 3
+const ABIVersion = 4
 
 // Completion statuses, matching error.rs.
 const (
@@ -128,6 +128,7 @@ type api struct {
 	connRemoteID        func(h uint64, outID, outErr unsafe.Pointer) int32
 	connALPN            func(h uint64, outALPN, outLen, outErr unsafe.Pointer) int32
 	connStats           func(h uint64, out unsafe.Pointer, outCap uintptr, outErr unsafe.Pointer) int32
+	connPaths           func(h uint64, outStr, outLen, outErr unsafe.Pointer) int32
 	connClose           func(h uint64, code uint64, reason unsafe.Pointer, reasonLen uintptr, outErr unsafe.Pointer) int32
 	connClosed          func(h uint64) uint64
 	connFree            func(h uint64)
@@ -253,6 +254,7 @@ func symbols() map[string]any {
 		"iroh_conn_remote_id":         &c.connRemoteID,
 		"iroh_conn_alpn":              &c.connALPN,
 		"iroh_conn_stats":             &c.connStats,
+		"iroh_conn_paths":             &c.connPaths,
 		"iroh_conn_close":             &c.connClose,
 		"iroh_conn_closed":            &c.connClosed,
 		"iroh_conn_free":              &c.connFree,

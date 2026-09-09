@@ -3,7 +3,10 @@ package iroh
 import (
 	"context"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/discobox-ai/iroh-go/internal/ffi"
 )
@@ -183,6 +186,81 @@ func (c *Conn) Stats() (ConnStats, error) {
 		LostPackets:       v[4],
 		LostBytes:         v[5],
 	}, nil
+}
+
+// PathKind is how a network path carries a connection's packets.
+type PathKind string
+
+const (
+	// PathIP is a direct path: UDP straight between the two endpoints.
+	PathIP PathKind = "ip"
+	// PathRelay is a path through a relay server. It is what carries a
+	// connection until hole punching succeeds, and what carries it for good
+	// between two endpoints that cannot reach each other directly.
+	PathRelay PathKind = "relay"
+	// PathCustom is a path over a transport the application supplied.
+	PathCustom PathKind = "custom"
+)
+
+// Path is one open network path of a connection.
+type Path struct {
+	Kind PathKind
+	// Selected reports whether this is the path application data is being
+	// sent on. Exactly one open path is selected at a time.
+	Selected bool
+	// Remote is the far end of this path in text form: an ip:port for
+	// [PathIP], a relay url for [PathRelay].
+	Remote string
+	// RTT is iroh's current round-trip estimate for this path.
+	RTT time.Duration
+}
+
+// pathFields is the number of tab-separated fields in one path record, as
+// iroh_conn_paths writes them.
+const pathFields = 4
+
+// Paths returns the connection's open network paths, which is how a caller
+// learns whether it is talking to the peer directly or through a relay, and
+// at what address.
+//
+// A connection usually has more than one: iroh opens on a relay, races the
+// direct addresses it knows alongside it, and moves application data onto the
+// best path that answers. So this is a snapshot of a moving picture -- a
+// connection is typically relayed at the handshake and direct a moment later
+// -- and a caller reporting how traffic actually flows should ask once the
+// connection has carried a round trip rather than the instant it is
+// established.
+func (c *Conn) Paths() ([]Path, error) {
+	h, err := c.h.get()
+	if err != nil {
+		return nil, err
+	}
+	text, err := ffi.ConnPaths(h)
+	if err != nil {
+		return nil, err
+	}
+	if text == "" {
+		return nil, nil
+	}
+	lines := strings.Split(text, "\n")
+	paths := make([]Path, 0, len(lines))
+	for _, line := range lines {
+		fields := strings.SplitN(line, "\t", pathFields)
+		if len(fields) != pathFields {
+			return nil, errKind(KindInternal, "unparsable path %q", line)
+		}
+		micros, err := strconv.ParseInt(fields[2], 10, 64)
+		if err != nil {
+			return nil, errKind(KindInternal, "unparsable path rtt %q: %v", fields[2], err)
+		}
+		paths = append(paths, Path{
+			Kind:     PathKind(fields[0]),
+			Selected: fields[1] == "1",
+			Remote:   fields[3],
+			RTT:      time.Duration(micros) * time.Microsecond,
+		})
+	}
+	return paths, nil
 }
 
 // Wait blocks until the connection closes and reports why.

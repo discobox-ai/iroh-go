@@ -362,3 +362,95 @@ func TestBoundSockets(t *testing.T) {
 		}
 	}
 }
+
+func TestConnPaths(t *testing.T) {
+	ctx := testContext(t)
+
+	server := mustBind(t, ctx, localOptions(testALPN))
+	client := mustBind(t, ctx, localOptions())
+
+	serverAddr, err := server.Addr()
+	if err != nil {
+		t.Fatalf("server addr: %v", err)
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- func() error {
+			conn, err := server.Accept(ctx)
+			if err != nil {
+				return err
+			}
+			defer conn.Close()
+			send, recv, err := conn.AcceptBi(ctx)
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(send, recv); err != nil {
+				return err
+			}
+			return send.Close()
+		}()
+	}()
+
+	conn, err := client.Connect(ctx, serverAddr, []byte(testALPN))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer conn.Close()
+
+	// Paths are read after a round trip rather than straight after the
+	// handshake, which is what the doc comment tells callers to do: the rtt
+	// estimate is what carrying traffic produces.
+	send, recv, err := conn.OpenBi(ctx)
+	if err != nil {
+		t.Fatalf("open bi: %v", err)
+	}
+	if _, err := io.WriteString(send, "ping"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	send.Close()
+	if got, err := io.ReadAll(recv); err != nil {
+		t.Fatalf("read: %v", err)
+	} else if string(got) != "ping" {
+		t.Fatalf("echo: got %q, want %q", got, "ping")
+	}
+
+	paths, err := conn.Paths()
+	if err != nil {
+		t.Fatalf("paths: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no paths on an established connection")
+	}
+	var selected int
+	for _, path := range paths {
+		// localOptions disables relays and binds loopback, so every path
+		// this connection can have is a direct one to the server's socket.
+		if path.Kind != iroh.PathIP {
+			t.Errorf("path %+v: got kind %q, want %q", path, path.Kind, iroh.PathIP)
+			continue
+		}
+		remote, err := netip.ParseAddrPort(path.Remote)
+		if err != nil {
+			t.Errorf("path %+v: remote does not parse: %v", path, err)
+			continue
+		}
+		if !remote.Addr().IsLoopback() {
+			t.Errorf("path %+v: remote is not the loopback address dialled", path)
+		}
+		if path.Selected {
+			selected++
+			if path.RTT <= 0 {
+				t.Errorf("path %+v: the selected path has no rtt estimate", path)
+			}
+		}
+	}
+	if selected != 1 {
+		t.Errorf("got %d selected paths, want exactly 1: %+v", selected, paths)
+	}
+
+	if err := <-errc; err != nil {
+		t.Fatalf("server: %v", err)
+	}
+}

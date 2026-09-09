@@ -397,6 +397,18 @@ func ConnStats(h uint64) ([StatsLen]uint64, error) {
 	return stats, nil
 }
 
+func ConnPaths(h uint64) (string, error) {
+	var (
+		ptr  unsafe.Pointer
+		n    uintptr
+		errh uint64
+	)
+	if c.connPaths(h, unsafe.Pointer(&ptr), unsafe.Pointer(&n), unsafe.Pointer(&errh)) != 0 {
+		return "", takeError(errh)
+	}
+	return takeString(ptr, n), nil
+}
+
 func ConnClose(h uint64, code uint64, reason []byte) error {
 	var errh uint64
 	rc := c.connClose(h, code, bytePtr(reason), uintptr(len(reason)), unsafe.Pointer(&errh))
