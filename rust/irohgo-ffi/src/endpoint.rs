@@ -4,8 +4,9 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Mutex;
 
+use iroh::endpoint::TransportAddrUsage;
 use iroh::endpoint::{presets, Builder};
-use iroh::{Endpoint, RelayMode, RelayUrl, SecretKey};
+use iroh::{Endpoint, RelayMode, RelayUrl, SecretKey, TransportAddr};
 
 use crate::addr::{decode_addr, encode_addr};
 use crate::error::{ErrKind, Error, Result};
@@ -306,6 +307,62 @@ pub extern "C" fn iroh_endpoint_home_relay(
             .unwrap_or_default();
         ffi::out_bytes(url.into_bytes(), out_str, out_len);
         FFI_OK
+    })
+}
+
+/// Yields the addresses this endpoint knows for `id`, one per line, as
+/// `kind\tusage\taddr`: kind is `ip`, `relay` or `custom`, and usage is
+/// `active` for an address in use or `inactive` for one that is merely known.
+///
+/// This is what a peer id resolved to: the addresses discovery found, plus any
+/// this endpoint learned from talking to the remote. iroh warns that they may
+/// be outdated or unusable, which is the point -- a dial that failed and a
+/// list of what it had to work with are the two halves of the same answer.
+///
+/// A remote the endpoint knows nothing about and one it knows only by id both
+/// yield nothing: neither gives a caller anything to dial.
+#[no_mangle]
+pub extern "C" fn iroh_endpoint_remote_info(handle: u64, id: *const u8) -> u64 {
+    ffi_guard!(0, {
+        let ep = match endpoint(handle) {
+            Ok(ep) => ep,
+            Err(e) => return ops::spawn_ready(Err(e)),
+        };
+        // Copied before this call returns: no Go pointer outlives it, and the
+        // future below runs long after.
+        let mut raw = [0u8; 32];
+        raw.copy_from_slice(unsafe { ffi::slice(id, 32) });
+        let id = match iroh_base::EndpointId::from_bytes(&raw) {
+            Ok(id) => id,
+            Err(e) => return ops::spawn_ready(Err(Error::new(ErrKind::KeyParsing, e))),
+        };
+        ops::spawn(async move {
+            let text = match ep.remote_info(id).await {
+                None => String::new(),
+                Some(info) => info
+                    .addrs()
+                    .map(|info| {
+                        // The payload rather than TransportAddr's own Display,
+                        // which prefixes the variant we already have a field
+                        // for. Usage is matched with a wildcard because the
+                        // enum is non_exhaustive; anything new reads as not in
+                        // use, which is the safe way for a report to be wrong.
+                        let (kind, addr) = match info.addr() {
+                            TransportAddr::Ip(ip) => ("ip", ip.to_string()),
+                            TransportAddr::Relay(url) => ("relay", url.to_string()),
+                            other => ("custom", format!("{other}")),
+                        };
+                        let usage = match info.usage() {
+                            TransportAddrUsage::Active => "active",
+                            _ => "inactive",
+                        };
+                        format!("{kind}\t{usage}\t{addr}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            };
+            Ok(OpValue::Bytes(text.into_bytes()))
+        })
     })
 }
 

@@ -454,3 +454,112 @@ func TestConnPaths(t *testing.T) {
 		t.Fatalf("server: %v", err)
 	}
 }
+
+// A peer id resolves to addresses, and a caller whose dial failed needs to see
+// them: discovery finding nothing and discovery returning something dead are
+// different problems. These endpoints reach each other through direct
+// addresses with no relay and no lookup service, so what the endpoint knows
+// after a connection is exactly the loopback socket it dialled.
+func TestRemoteAddrs(t *testing.T) {
+	ctx := testContext(t)
+
+	server := mustBind(t, ctx, localOptions(testALPN))
+	client := mustBind(t, ctx, localOptions())
+
+	serverAddr, err := server.Addr()
+	if err != nil {
+		t.Fatalf("server addr: %v", err)
+	}
+
+	// A remote nobody has spoken to yet is not an error and not a guess: it is
+	// an empty answer, which is what "the id resolved to nothing" looks like.
+	before, err := client.RemoteAddrs(ctx, server.ID())
+	if err != nil {
+		t.Fatalf("RemoteAddrs() before connecting: %v", err)
+	}
+	if len(before) != 0 {
+		t.Fatalf("RemoteAddrs() before connecting = %v, want none", before)
+	}
+
+	go func() {
+		if conn, err := server.Accept(ctx); err == nil {
+			defer conn.Close()
+			<-ctx.Done()
+		}
+	}()
+
+	conn, err := client.Connect(ctx, serverAddr, []byte(testALPN))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer conn.Close()
+
+	addrs, err := client.RemoteAddrs(ctx, server.ID())
+	if err != nil {
+		t.Fatalf("RemoteAddrs() error = %v", err)
+	}
+	if len(addrs) == 0 {
+		t.Fatal("RemoteAddrs() is empty for a peer this endpoint is connected to")
+	}
+	var active int
+	for _, addr := range addrs {
+		if addr.Kind != iroh.PathIP {
+			t.Errorf("addr %+v: got kind %q, want %q with no relay configured", addr, addr.Kind, iroh.PathIP)
+		}
+		if _, err := netip.ParseAddrPort(addr.Addr); err != nil {
+			t.Errorf("addr %+v: does not parse: %v", addr, err)
+		}
+		switch addr.Usage {
+		case iroh.AddrActive:
+			active++
+		case iroh.AddrInactive:
+		default:
+			t.Errorf("addr %+v: unknown usage %q", addr, addr.Usage)
+		}
+	}
+	if active == 0 {
+		t.Errorf("no address is active for a live connection: %v", addrs)
+	}
+}
+
+// The case this exists for is the dial that failed: if the addresses do not
+// outlive it, the report that most needs them is the one that cannot have
+// them. Nothing listens at the address below, so the dial times out and the
+// question is only whether the endpoint still remembers what it tried.
+func TestRemoteAddrsAfterAFailedDial(t *testing.T) {
+	ctx := testContext(t)
+	client := mustBind(t, ctx, localOptions())
+
+	key, err := iroh.GenerateSecretKey()
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	absent, err := key.Public()
+	if err != nil {
+		t.Fatalf("public: %v", err)
+	}
+
+	const dead = "127.0.0.1:1"
+	dialCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	conn, err := client.Connect(dialCtx, iroh.AddrOf(absent).WithDirectAddrs(netip.MustParseAddrPort(dead)), []byte(testALPN))
+	if err == nil {
+		conn.Close()
+		t.Fatal("connect succeeded against a peer that is not there")
+	}
+
+	addrs, err := client.RemoteAddrs(ctx, absent)
+	if err != nil {
+		t.Fatalf("RemoteAddrs() after a failed dial: %v", err)
+	}
+	t.Logf("after a failed dial, the endpoint knows: %v", addrs)
+	found := false
+	for _, addr := range addrs {
+		if addr.Addr == dead {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("RemoteAddrs() = %v, want it to still name %s, the address the failed dial tried", addrs, dead)
+	}
+}

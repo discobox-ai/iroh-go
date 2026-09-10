@@ -287,6 +287,13 @@ func EndpointBoundSockets(h uint64) (string, error) {
 	return takeString(ptr, n), nil
 }
 
+func EndpointRemoteInfo(ctx context.Context, h uint64, id []byte) (string, error) {
+	op := c.endpointRemoteInfo(h, bytePtr(id))
+	runtime.KeepAlive(id)
+	text, _, err := AwaitBytes(ctx, op)
+	return string(text), err
+}
+
 func EndpointOnline(ctx context.Context, h uint64) error {
 	return AwaitUnit(ctx, c.endpointOnline(h))
 }

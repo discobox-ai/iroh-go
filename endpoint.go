@@ -221,6 +221,75 @@ func (e *Endpoint) BoundSockets() ([]netip.AddrPort, error) {
 	return out, nil
 }
 
+// AddrUsage is whether an address the endpoint knows is one it is using.
+type AddrUsage string
+
+const (
+	// AddrActive is an address in active use.
+	AddrActive AddrUsage = "active"
+	// AddrInactive is an address the endpoint knows and is not using. It may
+	// be one that never worked.
+	AddrInactive AddrUsage = "inactive"
+)
+
+// RemoteAddr is one address this endpoint knows for a remote, and whether it
+// is being used.
+type RemoteAddr struct {
+	// Kind is how this address reaches the remote: [PathIP] straight to a
+	// socket, [PathRelay] through a relay server.
+	Kind  PathKind
+	Usage AddrUsage
+	// Addr is the address in text form: an ip:port for [PathIP], a relay url
+	// for [PathRelay].
+	Addr string
+}
+
+// remoteAddrFields is the number of tab-separated fields in one record, as
+// iroh_endpoint_remote_info writes them.
+const remoteAddrFields = 3
+
+// RemoteAddrs returns the addresses this endpoint knows for id: what a peer id
+// resolved to.
+//
+// It is the other half of a failed dial. `connect failed` says a peer could not
+// be reached and nothing about what was tried, and the difference between
+// discovery finding nothing at all and discovery returning addresses that no
+// longer answer is the difference between a remote that is not publishing and
+// one that has moved. Only this side knows which.
+//
+// iroh warns that these may be outdated or unusable, and that is the point
+// rather than a caveat: an address that is known and dead is a finding.
+//
+// A remote this endpoint knows nothing about and one it knows only by id both
+// report no addresses, because neither gives a caller anything to dial.
+func (e *Endpoint) RemoteAddrs(ctx context.Context, id EndpointID) ([]RemoteAddr, error) {
+	h, err := e.h.get()
+	if err != nil {
+		return nil, err
+	}
+	text, err := ffi.EndpointRemoteInfo(ctx, h, id[:])
+	if err != nil {
+		return nil, err
+	}
+	if text == "" {
+		return nil, nil
+	}
+	lines := strings.Split(text, "\n")
+	addrs := make([]RemoteAddr, 0, len(lines))
+	for _, line := range lines {
+		fields := strings.SplitN(line, "\t", remoteAddrFields)
+		if len(fields) != remoteAddrFields {
+			return nil, errKind(KindInternal, "unparsable remote address %q", line)
+		}
+		addrs = append(addrs, RemoteAddr{
+			Kind:  PathKind(fields[0]),
+			Usage: AddrUsage(fields[1]),
+			Addr:  fields[2],
+		})
+	}
+	return addrs, nil
+}
+
 // Online waits until the endpoint has connected to a relay.
 //
 // It never returns on its own when relays are disabled or there is no
